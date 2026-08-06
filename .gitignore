@@ -1,0 +1,16 @@
+# Dependencies (none needed — this is a static site)
+node_modules/
+
+# Vercel
+.vercel
+
+# OS noise
+.DS_Store
+Thumbs.db
+
+# Editors
+.vscode/
+.idea/
+
+# Logs
+*.log

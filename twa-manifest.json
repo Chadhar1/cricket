@@ -1,0 +1,58 @@
+{
+  "packageId": "app.vercel.cricket_pied_ten.twa",
+  "host": "cricket-pied-ten.vercel.app",
+  "name": "Cricket Connect",
+  "launcherName": "Connect",
+  "display": "standalone",
+  "themeColor": "#080b0a",
+  "themeColorDark": "#080b0a",
+  "navigationColor": "#080b0a",
+  "navigationColorDark": "#080b0a",
+  "navigationDividerColor": "#080b0a",
+  "navigationDividerColorDark": "#080b0a",
+  "backgroundColor": "#080b0a",
+  "enableNotifications": false,
+  "startUrl": "/index.html",
+  "iconUrl": "https://cricket-pied-ten.vercel.app/icon-512.png",
+  "maskableIconUrl": "https://cricket-pied-ten.vercel.app/icon-maskable-512.png",
+  "splashScreenFadeOutDuration": 300,
+  "signingKey": {
+    "path": "./android.keystore",
+    "alias": "cricketconnect"
+  },
+  "appVersionName": "4.0.0",
+  "appVersionCode": 2,
+  "shortcuts": [
+    {
+      "name": "New match",
+      "shortName": "Score",
+      "url": "/index.html?go=setup",
+      "chosenIconUrl": "https://cricket-pied-ten.vercel.app/icon-192.png"
+    },
+    {
+      "name": "Tournaments",
+      "shortName": "Cups",
+      "url": "/index.html?go=tournaments",
+      "chosenIconUrl": "https://cricket-pied-ten.vercel.app/icon-192.png"
+    },
+    {
+      "name": "Stats",
+      "shortName": "Stats",
+      "url": "/index.html?go=stats",
+      "chosenIconUrl": "https://cricket-pied-ten.vercel.app/icon-192.png"
+    }
+  ],
+  "generatorApp": "bubblewrap-cli",
+  "webManifestUrl": "https://cricket-pied-ten.vercel.app/manifest.json",
+  "fallbackType": "customtabs",
+  "features": {},
+  "alphaDependencies": {
+    "enabled": false
+  },
+  "enableSiteSettingsShortcut": true,
+  "isChromeOSOnly": false,
+  "isMetaQuest": false,
+  "fullScopeUrl": "https://cricket-pied-ten.vercel.app/",
+  "minSdkVersion": 21,
+  "orientation": "portrait"
+}

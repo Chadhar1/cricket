@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Live Score — Cricket Connect</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="description" content="Follow this match live on Cricket Connect — ball by ball, as it happens.">
+<meta name="theme-color" content="#080b0a">
+<link rel="apple-touch-icon" href="./icon-180.png">
+<link rel="icon" href="./icon-192.png">
+<link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+<div id="app">
+
+  <div class="topbar">
+    <div class="brand">
+      <span class="brand-mark" id="liveBrandMark"></span>
+      <span class="brand-text">
+        <span class="brand-name">Cricket <b>Connect</b></span>
+        <span class="brand-sub">LIVE SCORE</span>
+      </span>
+    </div>
+    <div class="topbar-actions">
+      <span class="live-badge" id="liveBadge"><span class="dot live"></span>Live</span>
+    </div>
+  </div>
+
+  <div id="loadingBox">
+    <div class="spinner"></div>
+    <div class="empty-note">Connecting to the match&hellip;</div>
+  </div>
+
+  <div id="errorBox" class="hidden">
+    <div class="card">
+      <h2>Match not available</h2>
+      <div class="empty-note" id="errorText">
+        This live link is not active. The scorer may have finished the match or stopped sharing.
+      </div>
+    </div>
+  </div>
+
+  <div id="liveBox" class="hidden">
+    <div class="scoreboard">
+      <div class="sb-teams" id="sbTeams"></div>
+      <div class="sb-score" id="sbScore">0<span>/0</span></div>
+      <div class="sb-meta">
+        <div>Overs <b id="sbOvers">0.0</b></div>
+        <div>CRR <b id="sbCRR">0.00</b></div>
+        <div id="sbRRRWrap" class="hidden">RRR <b id="sbRRR">-</b></div>
+      </div>
+      <div class="sb-target hidden" id="sbTarget"></div>
+      <div class="over-track" id="overTrack"></div>
+    </div>
+
+    <div class="card" id="resultCard" style="display:none;">
+      <div class="result-hero" style="padding:6px 0;">
+        <h2 id="resultHeadline"></h2>
+        <p id="resultSub"></p>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>At the crease</h2>
+      <div id="battersBox"></div>
+      <div class="stat-dim" id="extrasLine" style="margin-top:8px;"></div>
+    </div>
+
+    <div class="card">
+      <h2>Bowling</h2>
+      <div id="bowlerBox"></div>
+    </div>
+
+    <div class="card">
+      <h2>Commentary</h2>
+      <div class="commentary" id="commentaryBox"></div>
+    </div>
+
+    <div class="card" id="scorecardCard">
+      <h2>Full Scorecard</h2>
+      <div id="fullScorecard"></div>
+    </div>
+
+    <div class="viewer-note" id="updatedNote"></div>
+    <div class="brand-footer">
+      <div class="bf-name">Cricket Connect</div>
+      <div class="bf-tag">Connecting cricket. Creating champions.</div>
+    </div>
+  </div>
+
+</div>
+
+<script type="module">
+import { watchLiveMatch } from './cloud.js';
+import { isConfigured } from './supabase-config.js';
+import { fmtOvers, runRate, bowlerEcon, strikeRate } from './engine.js';
+import { brandMark } from './avatars.js';
+
+const $ = (id)=>document.getElementById(id);
+document.getElementById('liveBrandMark').innerHTML = brandMark(34);
+
+const params = new URLSearchParams(location.search);
+const matchId = params.get('m');
+
+function showError(msg){
+  $('loadingBox').classList.add('hidden');
+  $('liveBox').classList.add('hidden');
+  $('errorBox').classList.remove('hidden');
+  $('liveBadge').classList.add('hidden');
+  if(msg) $('errorText').textContent = msg;
+}
+
+function esc(s){
+  return String(s == null ? '' : s)
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+    .replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+}
+
+function teamNameOf(m, code){ return code === 'A' ? m.teamA : m.teamB; }
+
+function render(m){
+  $('loadingBox').classList.add('hidden');
+  $('errorBox').classList.add('hidden');
+  $('liveBox').classList.remove('hidden');
+
+  const inn = m.innings[m.currentInningsIdx];
+
+  $('sbTeams').textContent = teamNameOf(m, inn.battingTeam) + ' vs ' + teamNameOf(m, inn.bowlingTeam);
+  $('sbScore').innerHTML = inn.runs + '<span>/' + inn.wickets + '</span>';
+  $('sbOvers').textContent = fmtOvers(inn.legalBalls) + ' / ' + m.oversLimit;
+  $('sbCRR').textContent = runRate(inn.runs, inn.legalBalls);
+
+  if(inn.target != null){
+    const ballsLeft = (m.oversLimit * 6) - inn.legalBalls;
+    const runsNeeded = inn.target - inn.runs;
+    $('sbRRRWrap').classList.remove('hidden');
+    $('sbRRR').textContent = (runsNeeded > 0 && ballsLeft > 0)
+      ? (runsNeeded / (ballsLeft / 6)).toFixed(2) : '0.00';
+    $('sbTarget').classList.remove('hidden');
+    $('sbTarget').textContent = m.completed
+      ? 'Target was ' + inn.target
+      : 'Need ' + Math.max(runsNeeded,0) + ' from ' + Math.max(ballsLeft,0) + ' balls';
+  } else {
+    $('sbRRRWrap').classList.add('hidden');
+    $('sbTarget').classList.add('hidden');
+  }
+
+  $('overTrack').innerHTML = (inn.thisOverBalls && inn.thisOverBalls.length)
+    ? inn.thisOverBalls.map(b=>{
+        let cls = 'over-ball';
+        if(b.wicket) cls += ' wicket';
+        else if(b.four) cls += ' four';
+        else if(b.six) cls += ' six';
+        else if(b.extra) cls += ' extra';
+        return `<div class="${cls}">${esc(b.txt)}</div>`;
+      }).join('')
+    : '<div class="stat-dim">New over</div>';
+
+  // Result banner + live badge state
+  if(m.completed){
+    $('resultCard').style.display = '';
+    $('resultHeadline').textContent = m.resultText || '';
+    $('resultSub').textContent = m.resultSub || '';
+    $('liveBadge').innerHTML = 'Final';
+    $('liveBadge').style.color = 'var(--gold-soft)';
+  } else {
+    $('resultCard').style.display = 'none';
+  }
+
+  const striker = inn.batters[inn.strikerIdx];
+  const nonStriker = inn.batters[inn.nonStrikerIdx];
+  $('battersBox').innerHTML = [striker, nonStriker].map(b=>`
+    <div class="batters">
+      <span class="batter-name ${b === striker ? 'on-strike' : ''}">${esc(b.name)}</span>
+      <span class="stat-dim">${b.runs} (${b.balls}) &middot; 4s ${b.fours} 6s ${b.sixes} &middot; SR ${strikeRate(b)}</span>
+    </div>`).join('');
+
+  const ex = inn.extras;
+  $('extrasLine').textContent = 'Extras: ' + (ex.wd+ex.nb+ex.b+ex.lb) +
+    ' (wd ' + ex.wd + ', nb ' + ex.nb + ', b ' + ex.b + ', lb ' + ex.lb + ')';
+
+  const bw = inn.bowlers[inn.bowlerIdx];
+  $('bowlerBox').innerHTML = `<div class="bowler-line">
+    <span class="batter-name">${esc(bw.name)}</span>
+    <span class="stat-dim">${fmtOvers(bw.legalBalls)} ov &middot; ${bw.runs} r &middot; ${bw.wickets} w &middot; Econ ${bowlerEcon(bw)}</span>
+  </div>`;
+
+  const comm = m.commentary || [];
+  $('commentaryBox').innerHTML = comm.length
+    ? comm.map(c=>`<div class="comm-line"><span class="ov">${esc(c.ov)}</span><span class="tx">${esc(c.txt)}</span></div>`).join('')
+    : '<div class="stat-dim">Waiting for the first ball&hellip;</div>';
+
+  $('fullScorecard').innerHTML = m.innings.map((innx, i)=>{
+    const rows = innx.batters.map(b=>`
+      <tr><td>${esc(b.name)}</td><td class="stat-dim">${b.out ? esc(b.howOut) : 'not out'}</td>
+      <td class="num">${b.runs}</td><td class="num">${b.balls}</td><td class="num">${strikeRate(b)}</td></tr>`).join('');
+    const bowl = innx.bowlers.filter(b=>b.legalBalls > 0).map(b=>`
+      <tr><td>${esc(b.name)}</td><td class="num">${fmtOvers(b.legalBalls)}</td>
+      <td class="num">${b.runs}</td><td class="num">${b.wickets}</td><td class="num">${bowlerEcon(b)}</td></tr>`).join('');
+    return `<div class="scard-inn" style="margin-bottom:16px;">
+      <h4>Innings ${i+1} &mdash; ${esc(teamNameOf(m, innx.battingTeam))} ${innx.runs}/${innx.wickets} (${fmtOvers(innx.legalBalls)} ov)</h4>
+      <table class="sc-table">
+        <thead><tr><th>Batter</th><th>How out</th><th class="num">R</th><th class="num">B</th><th class="num">SR</th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+      <table class="sc-table" style="margin-top:10px;">
+        <thead><tr><th>Bowler</th><th class="num">O</th><th class="num">R</th><th class="num">W</th><th class="num">Econ</th></tr></thead>
+        <tbody>${bowl}</tbody>
+      </table>
+    </div>`;
+  }).join('');
+
+  $('updatedNote').textContent = 'Updates automatically. Last ball received ' + new Date().toLocaleTimeString() + '.';
+}
+
+/* ---- boot ---- */
+if(!matchId){
+  showError('No match specified in the link.');
+} else if(!isConfigured()){
+  showError('This deployment has no Supabase configuration yet, so live sharing is not enabled.');
+} else {
+  watchLiveMatch(matchId, render, (err)=>{
+    console.error(err);
+    if(err && err.message === 'not-found'){
+      showError('This live link is not active. The scorer may have finished the match or stopped sharing.');
+    } else {
+      showError('Could not connect to this match. Check the link and try again.');
+    }
+  });
+}
+</script>
+</body>
+</html>

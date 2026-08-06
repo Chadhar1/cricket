@@ -1,0 +1,345 @@
+rules_version = '2';
+
+/*  SUPERSEDED — this app now runs on Supabase, not Firebase. See supabase.sql
+ *  for the current schema and Row Level Security policies (the Postgres
+ *  equivalent of what's below). Kept here only as a reference for the access
+ *  rules this was designed around; no longer deployed or authoritative.
+ *
+ *  Cricket Connect — Firestore security rules
+ *
+ *  Paste into: Firebase console -> Firestore Database -> Rules -> Publish
+ *
+ *  Guiding principle: the client is not trusted. Anything social.js checks for
+ *  a nice user experience is checked AGAIN here, because only these rules
+ *  actually stop a determined person with the browser console open.
+ *
+ *  Layout
+ *    users/{uid}/**                 private: matches, teams, tournaments, events
+ *    profiles/{uid}                 public: handle, name, avatar, bio
+ *    handles/{handle}               uniqueness lock -> { uid }
+ *    connections/{pairId}           friendship, readable only by the two people
+ *    chats/{chatId}                 conversation, readable only by members
+ *    chats/{chatId}/messages/{id}   messages
+ *    clubs/{clubId}                 shared team
+ *    clubs/{clubId}/requests/{uid}  join requests
+ *    leagues/{leagueId}             public tournament
+ *    leagues/{id}/roster/{uid}      ONE doc per player — the one-team lock
+ *    organiserApplications/{id}     awaiting admin review
+ *    reports/{id}                   moderation queue
+ *    blocks/{uid}                   who this user has blocked
+ *    admins/{uid}                   super-admin allowlist — CONSOLE ONLY
+ *    liveMatches/{matchId}          public live score
+ */
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    /* ================= helpers ================= */
+
+    function signedIn(){ return request.auth != null; }
+    function me(){ return request.auth.uid; }
+    function isMe(uid){ return signedIn() && me() == uid; }
+
+    /* Admin is membership of a collection NO CLIENT CAN WRITE. You create your
+       own admin document by hand in the Firebase console. There is deliberately
+       no rule anywhere that allows writing to /admins, so nobody can promote
+       themselves — not even an existing admin from inside the app. */
+    function isAdmin(){
+      return signedIn() && exists(/databases/$(database)/documents/admins/$(me()));
+    }
+
+    function existingData(){ return resource.data; }
+    function incoming(){ return request.resource.data; }
+
+    /* ================= private user data ================= */
+    /* Matches, teams, tournaments and scheduled events stay entirely private. */
+    match /users/{uid} {
+      allow read, write: if isMe(uid);
+      match /{document=**} {
+        allow read, write: if isMe(uid);
+      }
+    }
+
+    /* ================= public profiles ================= */
+    /* Anyone signed in may browse profiles — that's how you find teammates.
+       Only the owner may write, and only an admin may grant roles. */
+    match /profiles/{uid} {
+      allow read: if signedIn();
+
+      allow create: if isMe(uid)
+                    && incoming().uid == uid
+                    && incoming().handle is string
+                    && incoming().handle.size() >= 3
+                    && incoming().handle.size() <= 20
+                    && incoming().handle.matches('^[a-z][a-z0-9_]*$')
+                    && incoming().displayName.size() <= 40
+                    && incoming().get('isAdmin', false) == false
+                    && incoming().get('isOrganiser', false) == false;
+
+      /* The owner may edit their own presentation but can never award
+         themselves organiser or admin status — those come from the admin. */
+      allow update: if (isMe(uid)
+                        && incoming().uid == uid
+                        && incoming().handle == existingData().handle
+                        && incoming().get('isAdmin', false) == existingData().get('isAdmin', false)
+                        && incoming().get('isOrganiser', false) == existingData().get('isOrganiser', false))
+                    || isAdmin();
+
+      allow delete: if isMe(uid) || isAdmin();
+    }
+
+    /* ================= handle uniqueness ================= */
+    /* The document id IS the handle. Because create is only permitted when the
+       document does not yet exist, two people cannot claim the same handle —
+       the second write fails at the database, not in the app. */
+    match /handles/{handle} {
+      allow read: if signedIn();
+      allow create: if signedIn()
+                    && incoming().uid == me()
+                    && handle.matches('^[a-z][a-z0-9_]*$')
+                    && handle.size() >= 3 && handle.size() <= 20;
+      allow delete: if signedIn() && existingData().uid == me();
+      allow update: if false;                   // release then re-claim instead
+    }
+
+    /* ================= connections ================= */
+    match /connections/{pairId} {
+      function amMember(){ return signedIn() && me() in resource.data.members; }
+      function willBeMember(){ return signedIn() && me() in incoming().members; }
+
+      allow read: if amMember() || isAdmin();
+
+      allow create: if willBeMember()
+                    && incoming().requestedBy == me()
+                    && incoming().status == 'pending'
+                    && incoming().members.size() == 2
+                    && incoming().members[0] != incoming().members[1];
+
+      /* Only the OTHER person may accept or decline. Neither party can change
+         who the members are, nor rewrite who sent it. */
+      allow update: if amMember()
+                    && incoming().members == existingData().members
+                    && incoming().requestedBy == existingData().requestedBy
+                    && (
+                         (existingData().status == 'pending'
+                          && existingData().requestedBy != me()
+                          && incoming().status in ['accepted','declined'])
+                         ||
+                         (existingData().status == 'accepted'
+                          && incoming().status == 'declined')     // unfriend
+                       );
+
+      allow delete: if amMember() || isAdmin();
+    }
+
+    /* ================= chat ================= */
+    match /chats/{chatId} {
+      function amMember(){ return signedIn() && me() in resource.data.members; }
+
+      allow read: if amMember();
+
+      allow create: if signedIn()
+                    && me() in incoming().members
+                    && incoming().members.size() >= 2
+                    && incoming().type in ['dm','team'];
+
+      /* Members may update the conversation preview, but cannot smuggle
+         themselves into or out of a different set of members. */
+      allow update: if amMember()
+                    && incoming().members == existingData().members
+                    && incoming().type == existingData().type;
+
+      allow delete: if isAdmin();
+
+      match /messages/{messageId} {
+        function inChat(){
+          return signedIn()
+                 && me() in get(/databases/$(database)/documents/chats/$(chatId)).data.members;
+        }
+
+        allow read: if inChat() || isAdmin();
+
+        allow create: if inChat()
+                      && incoming().senderUid == me()
+                      && incoming().text is string
+                      && incoming().text.size() > 0
+                      && incoming().text.size() <= 1000;
+
+        /* Messages are immutable once sent. Authors may delete their own;
+           admins may remove anything reported. Editing is disallowed so a
+           reported message cannot be quietly rewritten before review. */
+        allow update: if false;
+        allow delete: if (signedIn() && existingData().senderUid == me()) || isAdmin();
+      }
+    }
+
+    /* ================= clubs (shared teams) ================= */
+    match /clubs/{clubId} {
+      function isCaptain(){ return signedIn() && resource.data.captainUid == me(); }
+      function canManage(){
+        return signedIn()
+               && (resource.data.captainUid == me()
+                   || me() in resource.data.get('viceUids', []));
+      }
+      function amMember(){ return signedIn() && me() in resource.data.memberUids; }
+
+      /* Clubs are discoverable so players can ask to join. */
+      allow read: if signedIn();
+
+      allow create: if signedIn()
+                    && incoming().captainUid == me()
+                    && incoming().memberUids == [me()]
+                    && incoming().squadSize >= 2
+                    && incoming().squadSize <= 30
+                    && incoming().name.size() > 0
+                    && incoming().name.size() <= 40;
+
+      /* Captains and vices manage the squad. A member may update ONLY to
+         remove themselves — that is the "leave squad" path. The squad can
+         never exceed its own declared cap. */
+      allow update: if (canManage()
+                        && incoming().captainUid == existingData().captainUid
+                        && incoming().memberUids.size() <= incoming().squadSize
+                        && incoming().squadSize >= 2 && incoming().squadSize <= 30)
+                    || (amMember()
+                        && !(me() in incoming().memberUids)
+                        && incoming().captainUid == existingData().captainUid
+                        && incoming().memberUids.size() == existingData().memberUids.size() - 1)
+                    || isAdmin();
+
+      allow delete: if isCaptain() || isAdmin();
+
+      /* Join requests. The document id is the applicant's uid so one player
+         cannot flood a club with pending requests. */
+      match /requests/{applicantUid} {
+        function clubDoc(){
+          return get(/databases/$(database)/documents/clubs/$(clubId)).data;
+        }
+        function canManageClub(){
+          return signedIn()
+                 && (clubDoc().captainUid == me() || me() in clubDoc().get('viceUids', []));
+        }
+
+        allow read: if isMe(applicantUid) || canManageClub() || isAdmin();
+        allow create: if isMe(applicantUid)
+                      && incoming().uid == me()
+                      && incoming().status == 'pending'
+                      && clubDoc().open == true
+                      && clubDoc().memberUids.size() < clubDoc().squadSize;
+        allow update: if canManageClub();
+        allow delete: if isMe(applicantUid) || canManageClub() || isAdmin();
+      }
+    }
+
+    /* ================= leagues ================= */
+    match /leagues/{leagueId} {
+      function isOrganiser(){ return signedIn() && resource.data.organiserUid == me(); }
+
+      allow read: if true;                        // public — spectators too
+
+      /* Only an approved organiser or an admin may open a league. isOrganiser
+         on the profile is written by the admin, never by the user. */
+      allow create: if signedIn()
+                    && incoming().organiserUid == me()
+                    && (isAdmin()
+                        || get(/databases/$(database)/documents/profiles/$(me()))
+                             .data.get('isOrganiser', false) == true);
+
+      allow update: if isOrganiser() || isAdmin();
+      allow delete: if isOrganiser() || isAdmin();
+
+      /* THE ONE-TEAM-PER-LEAGUE LOCK.
+         The document id is the player's uid, so a player can hold at most one
+         roster entry per league. `create` requires the document not to exist
+         already, which is what makes the constraint real rather than advisory:
+         a second registration is rejected by the database itself, even if the
+         app forgets to check. */
+      match /roster/{playerUid} {
+        function leagueDoc(){
+          return get(/databases/$(database)/documents/leagues/$(leagueId)).data;
+        }
+        function runsLeague(){
+          return signedIn() && leagueDoc().organiserUid == me();
+        }
+        function captainOf(clubId){
+          return signedIn()
+                 && get(/databases/$(database)/documents/clubs/$(clubId)).data.captainUid == me();
+        }
+
+        allow read: if signedIn();
+
+        allow create: if !exists(/databases/$(database)/documents/leagues/$(leagueId)/roster/$(playerUid))
+                      && incoming().uid == playerUid
+                      && incoming().leagueId == leagueId
+                      && (isMe(playerUid) || captainOf(incoming().clubId) || runsLeague() || isAdmin());
+
+        /* No silent transfers between teams. Withdraw first, then re-register —
+           which makes the change visible rather than an in-place edit. */
+        allow update: if false;
+        allow delete: if isMe(playerUid) || runsLeague() || isAdmin();
+      }
+    }
+
+    /* ================= organiser applications ================= */
+    match /organiserApplications/{appId} {
+      allow read: if (signedIn() && resource.data.uid == me()) || isAdmin();
+
+      allow create: if signedIn()
+                    && incoming().uid == me()
+                    && incoming().status == 'pending'
+                    && incoming().orgName.size() >= 3
+                    && incoming().description.size() >= 20;
+
+      /* Only the admin decides. An applicant cannot approve themselves. */
+      allow update: if isAdmin();
+      allow delete: if isAdmin();
+    }
+
+    /* ================= moderation ================= */
+    /* Anyone may report; only admins may read the queue. Reports are
+       write-once from the reporter's side so they cannot be retracted or
+       edited after the fact. */
+    match /reports/{reportId} {
+      allow read: if isAdmin();
+      allow create: if signedIn()
+                    && incoming().reporterUid == me()
+                    && incoming().reporterUid != incoming().targetUid
+                    && incoming().status == 'open'
+                    && incoming().reason is string;
+      allow update: if isAdmin();
+      allow delete: if isAdmin();
+    }
+
+    /* A user's block list is theirs alone. Admins can read it when handling a
+       report, but nobody can see who has blocked them — that would invite
+       exactly the retaliation blocking exists to prevent. */
+    match /blocks/{uid} {
+      allow read: if isMe(uid) || isAdmin();
+      allow write: if isMe(uid);
+    }
+
+    /* ================= admin allowlist ================= */
+    /* Readable so the app can show the admin tab. NOT writable by anyone,
+       ever, through any path. Add yourself in the Firebase console. */
+    match /admins/{uid} {
+      allow read: if signedIn();
+      allow write: if false;
+    }
+
+    /* ================= live match sharing ================= */
+    match /liveMatches/{matchId} {
+      allow read: if true;                        // the whole point of the link
+
+      allow create: if signedIn() && incoming().ownerUid == me();
+      allow update: if signedIn()
+                    && existingData().ownerUid == me()
+                    && incoming().ownerUid == me();
+      allow delete: if (signedIn() && existingData().ownerUid == me()) || isAdmin();
+    }
+
+    /* ================= deny everything else ================= */
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

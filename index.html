@@ -1,0 +1,664 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Cricket Connect — Connecting cricket. Creating champions.</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="description" content="Cricket Connect — connecting cricket, creating champions. Ball-by-ball live scoring, teams, tournaments and career stats.">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Cricket Connect">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="theme-color" content="#080b0a">
+<link rel="manifest" href="./manifest.json">
+<link rel="apple-touch-icon" href="./icon-180.png">
+<link rel="icon" href="./icon-192.png">
+<link rel="stylesheet" href="./styles.css">
+</head>
+<body class="app">
+<aside class="sidebar" id="sidebar" aria-label="Main navigation">
+  <div class="sidebar-brand">
+    <span data-brandmark></span>
+    <span class="sb-name">Cricket <b>Connect</b></span>
+  </div>
+  <nav class="sidenav">
+    <button data-tabnav="home" class="active"><svg viewBox="0 0 24 24"><path d="M3 10.5L12 3l9 7.5"/><path d="M5 9.5V21h14V9.5"/></svg>Home</button>
+    <button data-tabnav="live"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M6.3 6.3a8 8 0 000 11.4M17.7 6.3a8 8 0 010 11.4M3.5 3.5a12 12 0 000 17M20.5 3.5a12 12 0 010 17"/></svg>Live Match<span class="pill-live" id="sideLive">LIVE</span></button>
+    <button data-tabnav="tournaments"><svg viewBox="0 0 24 24"><path d="M6 4h12v5a6 6 0 01-12 0z"/><path d="M6 6H3v2a4 4 0 004 4M18 6h3v2a4 4 0 01-4 4"/><path d="M10 19h4M12 15v4"/></svg>Tournaments</button>
+    <button data-tabnav="teams"><svg viewBox="0 0 24 24"><circle cx="9" cy="8" r="3"/><path d="M3 20v-1a5 5 0 015-5h2a5 5 0 015 5v1"/><circle cx="17" cy="9" r="2.5"/><path d="M16 14h1a4 4 0 014 4v2"/></svg>Teams</button>
+    <button data-tabnav="stats"><svg viewBox="0 0 24 24"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/></svg>Rankings</button>
+    <button data-tabnav="history"><svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M8 3v4M16 3v4M3 10h18"/></svg>History</button>
+    <button data-tabnav="friends"><svg viewBox="0 0 24 24"><circle cx="9" cy="8" r="3.5"/><path d="M2 20v-1a5 5 0 015-5h4a5 5 0 015 5v1"/><path d="M17 8a3 3 0 110 6M20 20v-1a4.5 4.5 0 00-3-4.2"/></svg>Friends</button>
+    <button data-tabnav="profile"><svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21v-1a6 6 0 016-6h4a6 6 0 016 6v1"/></svg>Profile</button>
+    <button data-tabnav="admin" id="sideAdminBtn" class="hidden"><svg viewBox="0 0 24 24"><path d="M12 3l8 4v5c0 5-3.4 8.5-8 10-4.6-1.5-8-5-8-10V7z"/><path d="M9 12l2 2 4-4"/></svg>Admin</button>
+  </nav>
+  <div class="sidebar-promo">
+    <div class="sp-t">Score anywhere</div>
+    <div class="sp-s">Works with no signal at the ground. Add to your home screen for the full app.</div>
+  </div>
+</aside>
+
+<div id="app">
+
+<div class="offline-banner hidden" id="offlineBanner">
+  <span class="dot offline"></span>Offline — scoring still works and will sync when you reconnect
+</div>
+
+<div class="install-banner hidden" id="installBanner">
+  <span class="ib-mark" id="installMark"></span>
+  <div class="ib-txt"><b>Install Cricket Connect</b><span>Full screen, works without signal</span></div>
+  <button class="icon-btn" id="installBtn">Install</button>
+  <button class="ib-x" id="installDismiss" aria-label="Dismiss install prompt">&times;</button>
+</div>
+
+<!-- ============================== AUTH ============================== -->
+<div id="screen-auth" class="hidden">
+  <div class="auth-wrap">
+    <div class="auth-hero" id="authHero"></div>
+
+    <div class="seg">
+      <button id="segSignIn" class="active">Sign in</button>
+      <button id="segSignUp">Create account</button>
+    </div>
+
+    <div class="card auth-card">
+      <div id="signUpFields" class="hidden">
+        <label>Your name</label>
+        <input type="text" id="authName" placeholder="e.g. Ghulam Abbas" maxlength="30" autocomplete="name">
+        <label>Choose an avatar</label>
+        <div class="avatar-grid" id="authAvatarGrid"></div>
+      </div>
+
+      <label>Email</label>
+      <input type="text" id="authEmail" placeholder="you@example.com" autocomplete="email" inputmode="email">
+      <label>Password</label>
+      <input type="password" id="authPassword" placeholder="At least 6 characters" autocomplete="current-password">
+
+      <button class="btn" id="authSubmitBtn">Sign in</button>
+      <button class="link-btn" id="forgotBtn">Forgot your password?</button>
+
+      <div class="or-line">or</div>
+      <button class="btn-google" id="googleBtn">
+        <svg viewBox="0 0 48 48"><path fill="#4285F4" d="M45.1 24.5c0-1.6-.1-3.1-.4-4.5H24v8.5h11.8c-.5 2.7-2 5-4.4 6.6v5.5h7.1c4.1-3.8 6.6-9.4 6.6-16.1z"/><path fill="#34A853" d="M24 46c5.9 0 10.9-2 14.6-5.4l-7.1-5.5c-2 1.3-4.5 2.1-7.5 2.1-5.8 0-10.7-3.9-12.4-9.1H4.3v5.7C8 41.2 15.4 46 24 46z"/><path fill="#FBBC05" d="M11.6 28.1c-.4-1.3-.7-2.7-.7-4.1s.2-2.8.7-4.1v-5.7H4.3C2.8 17.1 2 20.4 2 24s.8 6.9 2.3 9.8l7.3-5.7z"/><path fill="#EA4335" d="M24 10.8c3.3 0 6.2 1.1 8.5 3.3l6.3-6.3C34.9 4.1 29.9 2 24 2 15.4 2 8 6.8 4.3 14.2l7.3 5.7c1.7-5.2 6.6-9.1 12.4-9.1z"/></svg>
+        Continue with Google
+      </button>
+
+      <div id="authMsg"></div>
+    </div>
+
+    <div class="footnote">An account keeps your matches, teams and tournaments safe and synced
+      across devices, and is required to score, share live and join teams.</div>
+
+    <div class="trust-row">
+      <div class="trust-item"><svg viewBox="0 0 24 24"><path d="M12 3l8 4v5c0 5-3.4 8.5-8 10-4.6-1.5-8-5-8-10V7z"/></svg>Your data stays yours</div>
+      <div class="trust-item"><svg viewBox="0 0 24 24"><path d="M5 12l5 5L20 7"/></svg>Works offline</div>
+      <div class="trust-item"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a15 15 0 010 18 15 15 0 010-18"/></svg>Share live</div>
+    </div>
+  </div>
+</div>
+
+<!-- ============================== HOME ============================== -->
+<div id="screen-home" class="hidden">
+  <div class="topbar">
+    <div class="brand">
+      <span class="brand-mark" data-brandmark></span>
+      <span class="brand-text">
+        <span class="brand-name">Cricket <b>Connect</b></span>
+        <span class="brand-sub">LIVE MATCH SCORING</span>
+      </span>
+    </div>
+  </div>
+
+  <section class="hero">
+    <div class="hero-kicker">Connect. Compete. Grow.</div>
+    <h1>One platform.<span>Every cricketer.</span></h1>
+    <p>Score ball by ball, run your own tournaments, and share a live link so anyone can follow along.</p>
+    <div class="hero-actions">
+      <button class="btn" id="heroScore">Start scoring</button>
+      <button class="btn secondary" id="heroTournament">Browse tournaments</button>
+    </div>
+    <div class="hero-stats" id="heroStats"></div>
+  </section>
+
+  <div class="qa-rail" id="qaRail"></div>
+
+  <div class="profile-chip" id="homeProfile">
+    <div class="pc-av" id="homeAvatar"></div>
+    <div class="pc-txt">
+      <div class="pc-name" id="homeName">Guest</div>
+      <div class="pc-sub" id="homeSub">Local only</div>
+    </div>
+    <div class="pc-go">&rsaquo;</div>
+  </div>
+
+  <div class="resume-banner hidden" id="resumeBanner">
+    <div class="rb-txt">
+      <div class="rb-t" id="resumeTitle">Match in progress</div>
+      <div class="rb-s" id="resumeSub"></div>
+    </div>
+    <div class="pc-go">&rsaquo;</div>
+  </div>
+
+  <div class="card hidden" id="homeAdminCard" data-action="go-admin" style="cursor:pointer;">
+    <div class="sec-head"><h2>Admin</h2><span class="badge live" id="homeAdminPendingBadge">0 pending</span></div>
+    <div class="stat-strip">
+      <div class="stat-box"><div class="sv" id="homeAdminPending">0</div><div class="sl">Pending</div></div>
+      <div class="stat-box"><div class="sv" id="homeAdminOrganisers">0</div><div class="sl">Organisers</div></div>
+      <div class="stat-box"><div class="sv" id="homeAdminTournaments">0</div><div class="sl">Tournaments</div></div>
+      <div class="stat-box"><div class="sv" id="homeAdminMatches">0</div><div class="sl">Matches</div></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="sec-head"><h2>Upcoming</h2>
+      <button class="icon-btn" id="addEventBtn">+ Schedule</button>
+    </div>
+    <div id="eventsWidget"></div>
+  </div>
+
+  <div class="quick-grid" style="margin-bottom:14px;">
+    <button class="quick-btn primary" id="qaNewMatch">
+      <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 8v8M8 12h8"/></svg>
+      <b>New Match</b><span>Start scoring right now</span>
+    </button>
+    <button class="quick-btn" id="qaTournament">
+      <svg viewBox="0 0 24 24"><path d="M6 4h12v5a6 6 0 01-12 0z"/><path d="M6 6H3v2a4 4 0 004 4M18 6h3v2a4 4 0 01-4 4"/><path d="M10 19h4M12 15v4"/></svg>
+      <b>Tournament</b><span>League table & knockouts</span>
+    </button>
+    <button class="quick-btn" id="qaTeams">
+      <svg viewBox="0 0 24 24"><circle cx="9" cy="8" r="3"/><path d="M3 20v-1a5 5 0 015-5h2a5 5 0 015 5v1"/><circle cx="17" cy="9" r="2.5"/><path d="M16 14h1a4 4 0 014 4v2"/></svg>
+      <b>Teams</b><span>Squads and players</span>
+    </button>
+    <button class="quick-btn" id="qaHistory">
+      <svg viewBox="0 0 24 24"><path d="M3 12a9 9 0 109-9 9 9 0 00-6.4 2.6L3 8"/><path d="M3 4v4h4M12 7v5l3 2"/></svg>
+      <b>History</b><span>Past results</span>
+    </button>
+  </div>
+
+  <div class="card">
+    <div class="sec-head"><h2>Recent Results</h2>
+      <button class="icon-btn" id="viewAllHistoryBtn">View all</button>
+    </div>
+    <div id="recentResults"></div>
+  </div>
+</div>
+
+<!-- ============================== NEW MATCH SETUP ============================== -->
+<div id="screen-setup" class="hidden">
+  <button class="back-link" id="setupBack">&lsaquo; Back</button>
+  <div class="card">
+    <h2>New Match</h2>
+    <div id="setupContext" class="stat-dim hidden" style="margin-bottom:10px;"></div>
+    <label>Team batting first</label>
+    <input type="text" id="teamAName" placeholder="e.g. Lahore Lions" maxlength="24" autocomplete="off">
+    <div id="teamAPicks" class="chip-row"></div>
+    <label>Team bowling first</label>
+    <input type="text" id="teamBName" placeholder="e.g. Karachi Kings" maxlength="24" autocomplete="off">
+    <div id="teamBPicks" class="chip-row"></div>
+    <div class="row">
+      <div>
+        <label>Overs per innings</label>
+        <select id="oversLimit">
+          <option value="5">5</option><option value="6">6</option><option value="8">8</option>
+          <option value="10">10</option><option value="15">15</option>
+          <option value="20" selected>20 (T20)</option><option value="50">50 (ODI)</option>
+          <option value="0">Custom</option>
+        </select>
+      </div>
+      <div id="customOversWrap" class="hidden">
+        <label>Custom overs</label>
+        <input type="number" id="customOvers" min="1" max="90" value="20">
+      </div>
+      <div>
+        <label>Wickets = all out</label>
+        <input type="number" id="allOutWickets" min="1" max="11" value="10">
+      </div>
+    </div>
+    <label>Venue (optional)</label>
+    <input type="text" id="matchVenue" placeholder="e.g. Model Town Ground" maxlength="40" autocomplete="off">
+    <div class="toggle-line" style="margin-top:14px;">
+      <div>
+        <div style="font-size:14px;font-weight:600;">Share live</div>
+        <div class="stat-dim" id="liveHint">Sign in to share a live link</div>
+      </div>
+      <label class="switch"><input type="checkbox" id="liveShareToggle"><span class="slider"></span></label>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Opening Players</h2>
+    <label>Striker</label>
+    <input type="text" id="strikerName" placeholder="Batter 1 name" maxlength="20" autocomplete="off">
+    <div id="strikerPicks" class="chip-row"></div>
+    <label>Non-striker</label>
+    <input type="text" id="nonStrikerName" placeholder="Batter 2 name" maxlength="20" autocomplete="off">
+    <div id="nonStrikerPicks" class="chip-row"></div>
+    <label>Opening bowler</label>
+    <input type="text" id="bowlerName" placeholder="Bowler name" maxlength="20" autocomplete="off">
+    <div id="bowlerPicks" class="chip-row"></div>
+    <button class="btn" id="startMatchBtn">Start Match</button>
+  </div>
+</div>
+
+<!-- ============================== LIVE ============================== -->
+<div id="screen-live" class="hidden">
+  <div class="topbar">
+    <div class="brand">
+      <span class="brand-mark" data-brandmark></span>
+      <span class="brand-text">
+        <span class="brand-name">Cricket <b>Connect</b></span>
+        <span class="brand-sub" id="liveContext">LIVE</span>
+      </span>
+    </div>
+    <div class="topbar-actions">
+      <button class="icon-btn" id="liveHomeBtn">Home</button>
+    </div>
+  </div>
+
+  <div class="scoreboard">
+    <div class="sb-teams" id="sbTeams"></div>
+    <div class="sb-score" id="sbScore" aria-live="polite" aria-atomic="true">0<span>/0</span></div>
+    <div class="sb-meta">
+      <div>Overs <b id="sbOvers">0.0</b></div>
+      <div>CRR <b id="sbCRR">0.00</b></div>
+      <div id="sbRRRWrap" class="hidden">RRR <b id="sbRRR">-</b></div>
+    </div>
+    <div class="sb-target hidden" id="sbTarget"></div>
+    <div class="over-track" id="overTrack" aria-label="This over"></div>
+  </div>
+
+  <div class="card hidden" id="sharePanel">
+    <h2><span class="dot live"></span>Live share is on</h2>
+    <div class="stat-dim">Anyone with this link can watch ball by ball.</div>
+    <div class="share-url">
+      <code id="shareUrl">&mdash;</code>
+      <button class="icon-btn" id="copyShareBtn">Copy</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Batting</h2>
+    <div id="battersBox"></div>
+    <div class="stat-dim" id="extrasLine" style="margin-top:8px;"></div>
+  </div>
+
+  <div class="card">
+    <h2>Bowling</h2>
+    <div id="bowlerBox"></div>
+  </div>
+
+  <div class="card" id="matchPulseCard">
+    <h2>Match Pulse</h2>
+    <div class="pulse-grid" id="pulseGrid"></div>
+    <div class="recent-overs" id="recentOversStrip"></div>
+    <div id="fowStrip"></div>
+  </div>
+
+  <div class="card">
+    <h2>Score this ball</h2>
+    <div class="btn-grid">
+      <button class="run-btn" data-run="0">0</button>
+      <button class="run-btn" data-run="1">1</button>
+      <button class="run-btn" data-run="2">2</button>
+      <button class="run-btn" data-run="3">3</button>
+      <button class="run-btn four" data-run="4">4</button>
+      <button class="run-btn six" data-run="6">6</button>
+    </div>
+    <div class="extras-grid">
+      <button class="extra-btn" data-extra="wd">Wide</button>
+      <button class="extra-btn" data-extra="nb">No Ball</button>
+      <button class="extra-btn" data-extra="b">Bye</button>
+      <button class="extra-btn" data-extra="lb">Leg Bye</button>
+    </div>
+    <div class="action-row">
+      <button class="btn danger" id="wicketBtn">Wicket</button>
+      <button class="btn secondary" id="undoBtn">Undo</button>
+    </div>
+    <button class="btn secondary small" id="swapStrikeBtn">Swap Strike</button>
+    <button class="btn secondary small" id="endInningsBtn">End Innings Now</button>
+  </div>
+</div>
+
+<!-- ============================== RESULT ============================== -->
+<div id="screen-result" class="hidden">
+  <button class="back-link" id="resultBack">&lsaquo; Back</button>
+
+  <div class="result-hero-card">
+    <div class="rh-badge" id="resultBadge">RESULT</div>
+    <h2 id="resultHeadline"></h2>
+    <p id="resultSub"></p>
+    <div class="rh-scores" id="resultScores"></div>
+    <div class="potm hidden" id="potmBox"></div>
+  </div>
+
+  <div class="pill-row" id="mcTabs">
+    <button class="pill active" data-mc="scorecard">Scorecard</button>
+    <button class="pill" data-mc="commentary">Commentary</button>
+    <button class="pill" data-mc="info">Info</button>
+  </div>
+
+  <div id="mcScorecard"></div>
+  <div id="mcCommentary" class="hidden"></div>
+  <div id="mcInfo" class="hidden"></div>
+
+  <button class="btn gold" id="resultActionBtn">New Match</button>
+  <button class="btn secondary" id="resultShareBtn">Share Result</button>
+  <button class="btn secondary small hidden" id="superOverBtn">Play Super Over</button>
+</div>
+
+<!-- ============================== HISTORY ============================== -->
+<div id="screen-history" class="hidden">
+  <div class="topbar">
+    <div class="brand">
+      <span class="brand-mark" data-brandmark></span>
+      <span class="brand-text">
+        <span class="brand-name">Cricket <b>Connect</b></span>
+        <span class="brand-sub">PAST MATCHES</span>
+      </span>
+    </div>
+  </div>
+  <div class="card">
+    <div id="historyList"></div>
+  </div>
+</div>
+
+<!-- ============================== TEAMS ============================== -->
+<div id="screen-teams" class="hidden">
+  <div class="topbar">
+    <div class="brand">
+      <span class="brand-mark" data-brandmark></span>
+      <span class="brand-text">
+        <span class="brand-name">Cricket <b>Connect</b></span>
+        <span class="brand-sub">SQUADS &amp; PLAYERS</span>
+      </span>
+    </div>
+  </div>
+  <div class="card">
+    <div class="sec-head"><h2>Saved Teams</h2></div>
+    <div class="stat-dim" id="teamsHint"></div>
+    <div id="teamsList" style="margin-top:12px;"></div>
+  </div>
+  <div class="card">
+    <h2 id="teamFormTitle">Add Team</h2>
+    <label>Team name</label>
+    <input type="text" id="teamFormName" placeholder="e.g. Lahore Lions" maxlength="24" autocomplete="off">
+    <label>Add player</label>
+    <div class="row">
+      <input type="text" id="teamFormPlayer" placeholder="Player name" maxlength="20" autocomplete="off">
+      <button class="icon-btn" id="addPlayerBtn" style="flex:0 0 auto;">Add</button>
+    </div>
+    <div id="teamFormRoster" style="margin-top:10px;"></div>
+    <button class="btn" id="saveTeamBtn">Save Team</button>
+    <button class="btn secondary small" id="clearTeamFormBtn">Clear form</button>
+  </div>
+</div>
+
+<!-- ============================== TOURNAMENTS LIST ============================== -->
+<div id="screen-tournaments" class="hidden">
+  <div class="topbar">
+    <div class="brand">
+      <span class="brand-mark" data-brandmark></span>
+      <span class="brand-text">
+        <span class="brand-name">Cricket <b>Connect</b></span>
+        <span class="brand-sub">LEAGUES &amp; CUPS</span>
+      </span>
+    </div>
+    <div class="topbar-actions">
+      <button class="icon-btn" id="newTournamentBtn">+ New</button>
+    </div>
+  </div>
+  <div id="tournamentsList"></div>
+</div>
+
+<!-- ============================== TOURNAMENT DETAIL ============================== -->
+<div id="screen-tournament" class="hidden">
+  <button class="back-link" id="tourBack">&lsaquo; Tournaments</button>
+  <div class="topbar" style="padding-top:0;">
+    <div class="brand" style="min-width:0;">
+      <div class="brand-title" style="white-space:normal;" id="tourName">Tournament</div>
+    </div>
+    <div class="topbar-actions">
+      <button class="icon-btn" id="tourMenuBtn">Manage</button>
+    </div>
+  </div>
+
+  <div id="championBox"></div>
+
+  <div class="pill-row">
+    <button class="pill active" data-tab="table">Table</button>
+    <button class="pill" data-tab="fixtures">Fixtures</button>
+    <button class="pill" data-tab="knockout">Knockout</button>
+    <button class="pill" data-tab="teams">Teams</button>
+  </div>
+
+  <div id="tourTabTable"></div>
+  <div id="tourTabFixtures" class="hidden"></div>
+  <div id="tourTabKnockout" class="hidden"></div>
+  <div id="tourTabTeams" class="hidden"></div>
+</div>
+
+<!-- ============================== STATS ============================== -->
+<div id="screen-stats" class="hidden">
+  <div class="topbar">
+    <div class="brand">
+      <span class="brand-mark" data-brandmark></span>
+      <span class="brand-text">
+        <span class="brand-name">Cricket <b>Connect</b></span>
+        <span class="brand-sub">RECORDS &amp; STATS</span>
+      </span>
+    </div>
+  </div>
+
+  <div class="stat-strip" id="statStrip"></div>
+
+  <div class="pill-row" id="statsTabs">
+    <button class="pill active" data-st="batting">Batting</button>
+    <button class="pill" data-st="bowling">Bowling</button>
+    <button class="pill" data-st="teams">Teams</button>
+    <button class="pill" data-st="best">Best</button>
+  </div>
+
+  <div id="stTabBatting"></div>
+  <div id="stTabBowling" class="hidden"></div>
+  <div id="stTabTeams" class="hidden"></div>
+  <div id="stTabBest" class="hidden"></div>
+</div>
+
+<!-- ============================== PROFILE ============================== -->
+<div id="screen-profile" class="hidden">
+  <div class="topbar">
+    <div class="brand">
+      <span class="brand-mark" data-brandmark></span>
+      <span class="brand-text">
+        <span class="brand-name">Cricket <b>Connect</b></span>
+        <span class="brand-sub">ACCOUNT &amp; AVATAR</span>
+      </span>
+    </div>
+  </div>
+
+  <div class="card" style="text-align:center;">
+    <div class="avatar-big-wrap" id="profileAvatarBig" style="margin-bottom:10px;"></div>
+    <div style="font-size:18px;font-weight:700;" id="profileName">Guest</div>
+    <div class="stat-dim" id="profileEmail">Not signed in</div>
+  </div>
+
+  <div class="card" id="profileEditCard">
+    <h2>Your Details</h2>
+    <label>Display name</label>
+    <input type="text" id="profileNameInput" placeholder="Your name" maxlength="30" autocomplete="name">
+    <label>Username</label>
+    <input type="text" id="profileHandleInput" placeholder="e.g. haris_23" maxlength="20" autocomplete="off">
+    <div class="stat-dim" id="handleHint">Needed to find friends and to apply as an organiser. Letters, numbers and underscore only.</div>
+    <label>Profile photo</label>
+    <div class="photo-pick">
+      <div class="photo-preview" id="photoPreview"></div>
+      <div class="photo-actions">
+        <div class="pa-t">Your picture</div>
+        <div class="pa-s">Upload from your gallery, or pick one of the icons below.</div>
+        <div class="photo-btns">
+          <button class="icon-btn" id="photoUploadBtn">Upload photo</button>
+          <button class="icon-btn hidden" id="photoRemoveBtn">Remove</button>
+        </div>
+      </div>
+    </div>
+    <input type="file" id="photoInput" accept="image/*" class="hidden">
+
+    <label>Or choose an icon</label>
+    <div class="avatar-grid" id="profileAvatarGrid"></div>
+    <button class="btn" id="saveProfileBtn">Save Profile</button>
+  </div>
+
+  <div class="card">
+    <h2>Account</h2>
+    <div class="authbar" style="margin:0;">
+      <div class="who" id="authWho"><span class="dot offline"></span>Local only</div>
+    </div>
+    <button class="btn secondary" id="authActionBtn">Sign in</button>
+  </div>
+
+  <div class="card">
+    <h2>Social</h2>
+    <button class="action-row-btn" data-action="go-friends">
+      <span class="arb-ico"><svg viewBox="0 0 24 24"><circle cx="9" cy="8" r="3.5"/><path d="M2 20v-1a5 5 0 015-5h4a5 5 0 015 5v1"/></svg></span>
+      <span class="arb-txt"><span class="arb-t">Friends</span>
+        <span class="arb-s" id="friendsCountHint">Find and add players you know</span></span>
+      <span class="arb-go">&rsaquo;</span>
+    </button>
+    <button class="action-row-btn hidden" id="applyOrganiserBtn">
+      <span class="arb-ico"><svg viewBox="0 0 24 24"><path d="M6 4h12v5a6 6 0 01-12 0z"/><path d="M10 19h4M12 15v4"/></svg></span>
+      <span class="arb-txt"><span class="arb-t" id="applyOrganiserLabel">Apply to be an organiser</span>
+        <span class="arb-s" id="applyOrganiserSub">Run your own public tournaments</span></span>
+      <span class="arb-go">&rsaquo;</span>
+    </button>
+    <button class="action-row-btn hidden" id="goAdminBtn" data-action="go-admin">
+      <span class="arb-ico"><svg viewBox="0 0 24 24"><path d="M12 3l8 4v5c0 5-3.4 8.5-8 10-4.6-1.5-8-5-8-10V7z"/><path d="M9 12l2 2 4-4"/></svg></span>
+      <span class="arb-txt"><span class="arb-t">Admin dashboard</span>
+        <span class="arb-s">Organiser requests, platform overview</span></span>
+      <span class="arb-go">&rsaquo;</span>
+    </button>
+  </div>
+
+  <div class="card">
+    <h2>Data</h2>
+    <div class="stat-dim">Matches, teams and tournaments are stored on this device, and synced to your account when signed in.</div>
+    <button class="action-row-btn" id="exportDataBtn">
+      <span class="arb-ico"><svg viewBox="0 0 24 24"><path d="M12 3v12M7 11l5 5 5-5"/><path d="M5 20h14"/></svg></span>
+      <span class="arb-txt"><span class="arb-t">Export all data</span>
+        <span class="arb-s">Download everything as a JSON backup</span></span>
+      <span class="arb-go">&rsaquo;</span>
+    </button>
+    <a href="./privacy.html" class="action-row-btn" style="text-decoration:none;">
+      <span class="arb-ico"><svg viewBox="0 0 24 24"><path d="M12 3l8 4v5c0 5-3.4 8.5-8 10-4.6-1.5-8-5-8-10V7z"/></svg></span>
+      <span class="arb-txt"><span class="arb-t">Privacy policy</span>
+        <span class="arb-s">What we store and why</span></span>
+      <span class="arb-go">&rsaquo;</span>
+    </a>
+  </div>
+
+  <div class="brand-footer">
+    <div class="bf-name">Cricket Connect</div>
+    <div class="bf-tag">Connecting cricket. Creating champions.</div>
+    <div class="bf-tag" id="versionNote"></div>
+  </div>
+</div>
+
+<!-- ============================== FRIENDS ============================== -->
+<div id="screen-friends" class="hidden">
+  <div class="topbar">
+    <div class="brand">
+      <span class="brand-mark" data-brandmark></span>
+      <span class="brand-text">
+        <span class="brand-name">Cricket <b>Connect</b></span>
+        <span class="brand-sub">FRIENDS</span>
+      </span>
+    </div>
+  </div>
+
+  <div class="card" id="friendsHandleGate">
+    <h2>Pick a username first</h2>
+    <div class="stat-dim" style="margin-bottom:10px;">You need a public username before you can find or add friends.</div>
+    <button class="btn" data-action="go-profile">Set up your username</button>
+  </div>
+
+  <div id="friendsMain" class="hidden">
+    <div class="card">
+      <h2>Find players</h2>
+      <div class="row">
+        <input type="text" id="friendSearchInput" placeholder="Search by @username">
+        <button class="btn small" style="width:auto;flex:0 0 auto;" id="friendSearchBtn">Search</button>
+      </div>
+      <div id="friendSearchResults"></div>
+    </div>
+
+    <div class="card" id="friendRequestsCard">
+      <h2>Requests</h2>
+      <div id="friendRequestsList"></div>
+    </div>
+
+    <div class="card">
+      <h2>Your friends</h2>
+      <div id="friendsList"></div>
+    </div>
+  </div>
+</div>
+
+<!-- ============================== ADMIN ============================== -->
+<div id="screen-admin" class="hidden">
+  <div class="topbar">
+    <div class="brand">
+      <span class="brand-mark" data-brandmark></span>
+      <span class="brand-text">
+        <span class="brand-name">Cricket <b>Connect</b></span>
+        <span class="brand-sub">ADMIN</span>
+      </span>
+    </div>
+  </div>
+
+  <div class="stat-strip">
+    <div class="stat-box"><div class="sv" id="adminStatPending">0</div><div class="sl">Pending</div></div>
+    <div class="stat-box"><div class="sv" id="adminStatOrganisers">0</div><div class="sl">Organisers</div></div>
+    <div class="stat-box"><div class="sv" id="adminStatTournaments">0</div><div class="sl">Tournaments</div></div>
+    <div class="stat-box"><div class="sv" id="adminStatMatches">0</div><div class="sl">Matches</div></div>
+  </div>
+
+  <div class="card">
+    <h2>Organiser requests</h2>
+    <div class="stat-dim" style="margin-bottom:6px;">Players who've applied to run their own tournaments. Approving grants them the organiser badge on their profile.</div>
+    <div id="adminAppsList"></div>
+  </div>
+
+  <div class="card">
+    <h2>Your tournaments</h2>
+    <div class="stat-dim" style="margin-bottom:6px;">Full cross-account tournament oversight is coming next — for now this lists tournaments on this device/account.</div>
+    <div id="adminToursList"></div>
+  </div>
+</div>
+
+</div><!-- /#app -->
+
+<!-- ============================== TAB BAR ============================== -->
+<nav class="tabbar hidden" id="tabbar" aria-label="Main navigation">
+  <button data-tabnav="home" class="active">
+    <svg viewBox="0 0 24 24"><path d="M3 10.5L12 3l9 7.5"/><path d="M5 9.5V21h14V9.5"/></svg>Home</button>
+  <button data-tabnav="tournaments">
+    <svg viewBox="0 0 24 24"><path d="M6 4h12v5a6 6 0 01-12 0z"/><path d="M6 6H3v2a4 4 0 004 4M18 6h3v2a4 4 0 01-4 4"/><path d="M10 19h4M12 15v4"/></svg>Cups</button>
+  <button data-tabnav="teams">
+    <svg viewBox="0 0 24 24"><circle cx="9" cy="8" r="3"/><path d="M3 20v-1a5 5 0 015-5h2a5 5 0 015 5v1"/><circle cx="17" cy="9" r="2.5"/><path d="M16 14h1a4 4 0 014 4v2"/></svg>Teams</button>
+  <button data-tabnav="stats">
+    <svg viewBox="0 0 24 24"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/></svg>Stats</button>
+  <button data-tabnav="profile">
+    <svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21v-1a6 6 0 016-6h4a6 6 0 016 6v1"/></svg>Profile</button>
+</nav>
+
+<button class="fab" id="fabNew" aria-label="Start a new match"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg></button>
+
+<div id="modalRoot" role="dialog" aria-live="polite"></div>
+
+<script type="module" src="./app.js"></script>
+<script>
+  if('serviceWorker' in navigator){
+    window.addEventListener('load', ()=>navigator.serviceWorker.register('./sw.js').catch(()=>{}));
+  }
+</script>
+</body>
+</html>
