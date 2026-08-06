@@ -218,7 +218,13 @@ async function submitAuth(){
     if(authMode === 'signup'){
       const name = $('authName').value.trim() || email.split('@')[0];
       await signUpEmail(email, pw, name);
-      profile = { displayName:name, avatarId:authAvatar };
+      profile = {
+        displayName:name, avatarId:authAvatar,
+        country: $('authCountry').value.trim(),
+        region: $('authRegion').value.trim(),
+        district: $('authDistrict').value.trim(),
+        area: $('authArea').value.trim()
+      };
       saveProfileLocal();
       await saveProfile(profile);
       toast('Welcome, ' + name);
@@ -348,6 +354,13 @@ function renderProfile(){
   $('profileEmail').textContent = u ? (u.email || 'Signed in') : 'Not signed in';
   $('profileNameInput').value = profile.displayName || (u && u.displayName) || '';
   $('profileHandleInput').value = (myPublicProfile && myPublicProfile.handle) || '';
+  // local `profile` wins over myPublicProfile here (not the other way like
+  // handle) since it's updated in place the moment the form is saved, while
+  // myPublicProfile is only refetched when the handle itself changes.
+  $('profileCountryInput').value = profile.country || (myPublicProfile && myPublicProfile.country) || '';
+  $('profileRegionInput').value = profile.region || (myPublicProfile && myPublicProfile.region) || '';
+  $('profileDistrictInput').value = profile.district || (myPublicProfile && myPublicProfile.district) || '';
+  $('profileAreaInput').value = profile.area || (myPublicProfile && myPublicProfile.area) || '';
   $('profileAvatarGrid').innerHTML = AVATARS.map(a=>
     `<div class="avatar-opt ${a.id === (profile.avatarId||DEFAULT_AVATAR) ? 'sel':''}" data-pavatar="${a.id}">${avatarSVG(a.id, 46)}</div>`).join('');
 
@@ -383,6 +396,10 @@ function renderProfile(){
 }
 async function saveProfileForm(){
   profile.displayName = $('profileNameInput').value.trim() || displayName();
+  profile.country = $('profileCountryInput').value.trim();
+  profile.region = $('profileRegionInput').value.trim();
+  profile.district = $('profileDistrictInput').value.trim();
+  profile.area = $('profileAreaInput').value.trim();
   saveProfileLocal();
   if(cloudReady() && getUser()){
     await changeDisplayName(profile.displayName);
@@ -2209,7 +2226,15 @@ async function boot(){
     onAuth(async (user)=>{
       if(user){
         const p = await fetchProfile();
-        if(p) profile = { displayName: p.displayName || profile.displayName, avatarId: p.avatarId || profile.avatarId };
+        if(p) profile = {
+          displayName: p.displayName || profile.displayName,
+          avatarId: p.avatarId || profile.avatarId,
+          photo: p.photo || profile.photo,
+          country: p.country || profile.country,
+          region: p.region || profile.region,
+          district: p.district || profile.district,
+          area: p.area || profile.area
+        };
         else await saveProfile(profile);
         saveProfileLocal();
 

@@ -150,7 +150,11 @@ export async function saveProfile(profile){
     id: currentUser.id,
     display_name: profile.displayName || '',
     avatar_id: profile.avatarId || 'helmet',
-    photo: profile.photo || null
+    photo: profile.photo || null,
+    country: profile.country || '',
+    region: profile.region || '',
+    district: profile.district || '',
+    area: profile.area || ''
   });
   if(error){ console.error('saveProfile failed:', error); return false; }
   return true;
@@ -160,7 +164,8 @@ function toAppProfile(row){
   return {
     uid: row.id, handle: row.handle, displayName: row.display_name, avatarId: row.avatar_id,
     photo: row.photo || undefined,
-    bio: row.bio, isOrganiser: row.is_organiser, isAdmin: row.is_admin, updatedAt: row.updated_at
+    bio: row.bio, isOrganiser: row.is_organiser, isAdmin: row.is_admin, updatedAt: row.updated_at,
+    country: row.country || '', region: row.region || '', district: row.district || '', area: row.area || ''
   };
 }
 

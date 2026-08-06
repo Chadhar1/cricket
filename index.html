@@ -65,6 +65,30 @@
       <div id="signUpFields" class="hidden">
         <label>Your name</label>
         <input type="text" id="authName" placeholder="e.g. Ghulam Abbas" maxlength="30" autocomplete="name">
+
+        <label>Your location</label>
+        <div class="stat-dim" style="margin:-2px 0 8px;">Helps us show you nearby tournaments and grounds.</div>
+        <div class="row">
+          <div>
+            <label>Country</label>
+            <input type="text" id="authCountry" placeholder="e.g. Pakistan" maxlength="40" autocomplete="country-name">
+          </div>
+          <div>
+            <label>Province / State / Emirate</label>
+            <input type="text" id="authRegion" placeholder="e.g. Punjab, Sindh, Dubai" maxlength="40" autocomplete="address-level1">
+          </div>
+        </div>
+        <div class="row">
+          <div>
+            <label>District</label>
+            <input type="text" id="authDistrict" placeholder="e.g. Lahore" maxlength="40" autocomplete="address-level2">
+          </div>
+          <div>
+            <label>Tehsil / Area</label>
+            <input type="text" id="authArea" placeholder="e.g. Model Town" maxlength="40" autocomplete="address-level3">
+          </div>
+        </div>
+
         <label>Choose an avatar</label>
         <div class="avatar-grid" id="authAvatarGrid"></div>
       </div>
@@ -489,6 +513,30 @@
     <label>Username</label>
     <input type="text" id="profileHandleInput" placeholder="e.g. haris_23" maxlength="20" autocomplete="off">
     <div class="stat-dim" id="handleHint">Needed to find friends and to apply as an organiser. Letters, numbers and underscore only.</div>
+
+    <label>Your location</label>
+    <div class="stat-dim" style="margin:-2px 0 8px;">Helps us show you nearby tournaments and grounds.</div>
+    <div class="row">
+      <div>
+        <label>Country</label>
+        <input type="text" id="profileCountryInput" placeholder="e.g. Pakistan" maxlength="40" autocomplete="country-name">
+      </div>
+      <div>
+        <label>Province / State / Emirate</label>
+        <input type="text" id="profileRegionInput" placeholder="e.g. Punjab, Sindh, Dubai" maxlength="40" autocomplete="address-level1">
+      </div>
+    </div>
+    <div class="row">
+      <div>
+        <label>District</label>
+        <input type="text" id="profileDistrictInput" placeholder="e.g. Lahore" maxlength="40" autocomplete="address-level2">
+      </div>
+      <div>
+        <label>Tehsil / Area</label>
+        <input type="text" id="profileAreaInput" placeholder="e.g. Model Town" maxlength="40" autocomplete="address-level3">
+      </div>
+    </div>
+
     <label>Profile photo</label>
     <div class="photo-pick">
       <div class="photo-preview" id="photoPreview"></div>

@@ -66,6 +66,15 @@ create table if not exists public.profiles (
   -- small enough to live directly on the row, no storage bucket needed.
   photo         text,
   bio           text not null default '' check (char_length(bio) <= 160),
+  -- Location, captured at signup (and editable later) so players can be
+  -- sorted by area for promotions, regional tournaments and ground
+  -- bookings. Deliberately free text, not a fixed lookup table: "province"
+  -- vs "state" vs "emirate", and "tehsil" vs "county" vs "borough", vary by
+  -- country and there's no single hierarchy that fits everyone.
+  country       text not null default '' check (char_length(country) <= 60),
+  region        text not null default '' check (char_length(region) <= 60),  -- province / state / emirate
+  district      text not null default '' check (char_length(district) <= 60),
+  area          text not null default '' check (char_length(area) <= 60),    -- tehsil / famous locality
   is_organiser  boolean not null default false,
   is_admin      boolean not null default false,
   updated_at    timestamptz not null default now()
@@ -304,6 +313,18 @@ create policy "owner or admin can delete a live match" on public.live_matches fo
 
 -- Realtime: let the live viewer subscribe to score updates.
 alter publication supabase_realtime add table public.live_matches;
+
+-- ---------------------------------------------------------------------------
+-- MIGRATION — location fields on profiles (country / region / district /
+-- area). Safe to run again on a database that already has this file applied:
+-- the base CREATE TABLE above is skipped by `if not exists` on an existing
+-- table, so these columns won't get added automatically — run this block
+-- once in the SQL Editor against your existing project.
+-- ---------------------------------------------------------------------------
+alter table public.profiles add column if not exists country  text not null default '' check (char_length(country) <= 60);
+alter table public.profiles add column if not exists region   text not null default '' check (char_length(region) <= 60);
+alter table public.profiles add column if not exists district text not null default '' check (char_length(district) <= 60);
+alter table public.profiles add column if not exists area     text not null default '' check (char_length(area) <= 60);
 
 -- ---------------------------------------------------------------------------
 -- Bootstrap: run this yourself once, after you've signed up in the app, to
