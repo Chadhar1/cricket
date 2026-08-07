@@ -134,6 +134,17 @@ begin
       'create policy "owner has full access" on public.%1$I for all using (user_id = auth.uid()) with check (user_id = auth.uid());',
       t
     );
+
+    -- Read-only, platform-wide visibility for admins — this is what makes
+    -- the Admin dashboard's tournament/match counts actually reflect the
+    -- whole platform instead of just whichever account is signed in on this
+    -- device. Admins can SELECT any row here, never write/delete another
+    -- user's data (no admin bypass on insert/update/delete — the "owner has
+    -- full access" policy above is still the only write path).
+    execute format(
+      'create policy "admin can read all rows" on public.%1$I for select using (public.is_admin());',
+      t
+    );
   end loop;
 end $$;
 
@@ -325,6 +336,27 @@ alter table public.profiles add column if not exists country  text not null defa
 alter table public.profiles add column if not exists region   text not null default '' check (char_length(region) <= 60);
 alter table public.profiles add column if not exists district text not null default '' check (char_length(district) <= 60);
 alter table public.profiles add column if not exists area     text not null default '' check (char_length(area) <= 60);
+
+-- ---------------------------------------------------------------------------
+-- MIGRATION — admin platform-wide read access on matches/teams/tournaments/
+-- events. Without this, the Admin dashboard's tournament/match stats only
+-- ever reflect whichever account happens to be signed in, not the whole
+-- platform, because every existing policy on these tables is owner-only.
+-- `create policy` has no `if not exists`, so this drops+recreates safely if
+-- you run it more than once.
+-- ---------------------------------------------------------------------------
+do $$
+declare
+  t text;
+begin
+  foreach t in array array['matches','teams','tournaments','events'] loop
+    execute format('drop policy if exists "admin can read all rows" on public.%1$I;', t);
+    execute format(
+      'create policy "admin can read all rows" on public.%1$I for select using (public.is_admin());',
+      t
+    );
+  end loop;
+end $$;
 
 -- ---------------------------------------------------------------------------
 -- Bootstrap: run this yourself once, after you've signed up in the app, to

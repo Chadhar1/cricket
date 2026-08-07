@@ -337,6 +337,36 @@ export async function countOrganisers(){
   return count || 0;
 }
 
+/* ---------------- admin: platform-wide oversight ----------------
+   The generic per-user tables (matches/teams/tournaments/events) are
+   owner-only by default — fetchTeams()/fetchTournaments() etc. above
+   deliberately filter to the signed-in user. These bypass that filter and
+   rely on the "admin can read all rows" RLS policy (supabase.sql) instead,
+   so they only ever return real data for an actual admin — for anyone else
+   RLS silently returns nothing, same as querying a table you can't see. */
+
+async function countAllIn(table){
+  if(!ready) return 0;
+  const { count, error } = await sb.from(table).select('id', { count:'exact', head:true });
+  if(error){ console.error(`countAllIn ${table} failed:`, error); return 0; }
+  return count || 0;
+}
+
+export async function fetchPlatformStats(){
+  const [tournaments, matches] = await Promise.all([
+    countAllIn('tournaments'), countAllIn('matches')
+  ]);
+  return { tournaments, matches };
+}
+
+export async function fetchPlatformTournaments(max = 100){
+  if(!ready) return [];
+  const { data, error } = await sb.from('tournaments')
+    .select('data').order('updated_at', { ascending: false }).limit(max);
+  if(error){ console.error('fetchPlatformTournaments failed:', error); return []; }
+  return data.map(r=>r.data);
+}
+
 export async function fetchPendingOrganiserApplications(){
   if(!ready || !currentUser) return [];
   const { data, error } = await sb.from('organiser_applications').select('*').eq('status', 'pending');

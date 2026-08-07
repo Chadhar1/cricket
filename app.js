@@ -41,7 +41,8 @@ import {
   fetchMyConnections, sendConnectionRequest, respondToConnection, removeConnection,
   submitOrganiserApplication, fetchMyOrganiserApplications,
   isCurrentUserAdmin, fetchPendingOrganiserApplications, countOrganisers,
-  approveOrganiserApplication, rejectOrganiserApplication
+  approveOrganiserApplication, rejectOrganiserApplication,
+  fetchPlatformStats, fetchPlatformTournaments
 } from './cloud.js';
 
 import {
@@ -80,7 +81,7 @@ let myConnections = [];
 let friendResults = [];
 let profileCache = {};
 let pendingApps = [];
-let adminOverview = { organisers:0, tournaments:0, matches:0 };
+let adminOverview = { organisers:0, tournaments:0, matches:0, tournamentsList:[] };
 
 const $ = (id)=>document.getElementById(id);
 
@@ -557,17 +558,23 @@ async function submitApplyOrganiser(){
 
 async function refreshAdminData(){
   if(!isAdminUser) return;
-  const [apps, orgCount] = await Promise.all([fetchPendingOrganiserApplications(), countOrganisers()]);
+  const [apps, orgCount, platformStats, platformTours] = await Promise.all([
+    fetchPendingOrganiserApplications(), countOrganisers(),
+    fetchPlatformStats(), fetchPlatformTournaments()
+  ]);
   pendingApps = apps;
   adminOverview.organisers = orgCount;
+  adminOverview.tournaments = platformStats.tournaments;
+  adminOverview.matches = platformStats.matches;
+  adminOverview.tournamentsList = platformTours;
   await resolveProfiles(pendingApps.map(a=>a.uid));
 }
 
 function renderAdmin(){
   $('adminStatPending').textContent = pendingApps.length;
   $('adminStatOrganisers').textContent = adminOverview.organisers;
-  $('adminStatTournaments').textContent = tournaments.length;
-  $('adminStatMatches').textContent = historyList().length;
+  $('adminStatTournaments').textContent = adminOverview.tournaments;
+  $('adminStatMatches').textContent = adminOverview.matches;
 
   $('adminAppsList').innerHTML = pendingApps.length ? pendingApps.map(a=>{
     const p = profileCache[a.uid] || {};
@@ -585,8 +592,9 @@ function renderAdmin(){
     </div>`;
   }).join('') : '<div class="empty-note">No pending requests.</div>';
 
-  $('adminToursList').innerHTML = tournaments.length
-    ? tournaments.map(t=>`<div class="hist-item"><div class="batter-name">${esc(t.name)}</div><div class="d">${(t.teams||[]).length} teams</div></div>`).join('')
+  const platformTours = adminOverview.tournamentsList || [];
+  $('adminToursList').innerHTML = platformTours.length
+    ? platformTours.map(t=>`<div class="hist-item"><div class="batter-name">${esc(t.name || 'Untitled tournament')}</div><div class="d">${(t.teams||[]).length} teams</div></div>`).join('')
     : '<div class="empty-note">No tournaments yet.</div>';
 }
 
@@ -657,8 +665,8 @@ function renderHome(){
     $('homeAdminPendingBadge').textContent = pendingApps.length + ' pending';
     $('homeAdminPendingBadge').classList.toggle('hidden', pendingApps.length === 0);
     $('homeAdminOrganisers').textContent = adminOverview.organisers;
-    $('homeAdminTournaments').textContent = tournaments.length;
-    $('homeAdminMatches').textContent = historyList().length;
+    $('homeAdminTournaments').textContent = adminOverview.tournaments;
+    $('homeAdminMatches').textContent = adminOverview.matches;
   }
 
   renderEventsWidget();
