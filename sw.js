@@ -5,7 +5,7 @@
 
    After you deploy a change, bump VERSION so phones fetch the new files. */
 
-const VERSION = 'v9';
+const VERSION = 'v10';
 const CACHE = 'cricket-connect-' + VERSION;
 
 const SHELL = [
@@ -21,7 +21,7 @@ const SHELL = [
   './stats.js',
   './social.js',
   './privacy.html',
-  './firebase-config.js',
+  './supabase-config.js',
   './manifest.json',
   './icon-192.png',
   './icon-512.png',
@@ -52,7 +52,8 @@ self.addEventListener('fetch', (event)=>{
 
   const url = new URL(req.url);
 
-  // Never cache Firebase traffic — it must always hit the network.
+  // Never cache cross-origin traffic (Supabase auth/API/realtime) — it must
+  // always hit the network.
   if(url.origin !== location.origin) return;
 
   event.respondWith(

@@ -36,16 +36,16 @@
   </div>
 
   <h1>Privacy Policy</h1>
-  <div class="updated">Last updated: 2 August 2026</div>
+  <div class="updated">Last updated: 7 August 2026</div>
 
   <p>Cricket Connect is a cricket scoring app. This page explains, in plain terms, what
   data it holds, why, and what control you have over it.</p>
 
   <div class="note">
     <b>The short version.</b> If you use the app without an account, nothing leaves your
-    device. If you create an account, your email, display name and match data are stored
-    in Google Firebase so they sync across your devices. Nothing is sold, shared with
-    advertisers, or used for tracking.
+    device. If you create an account, your email, display name, general location and match
+    data are stored with Supabase so they sync across your devices. Nothing is sold, shared
+    with advertisers, or used for tracking.
   </div>
 
   <h2>Using the app without an account</h2>
@@ -57,19 +57,29 @@
   <h2>What is collected if you create an account</h2>
   <ul>
     <li><b>Email address</b> — to identify your account and let you sign in or reset a password.</li>
-    <li><b>Display name and profile picture</b> — shown in the app. You may either pick one of
+    <li><b>Display name, username and profile picture</b> — shown to other players once you set
+        a username (needed to find friends or apply as an organiser). You may either pick one of
         twelve built-in illustrations, or upload a photo from your device. An uploaded photo is
-        resized to 256&nbsp;pixels, compressed, and stored with your profile. It is only visible
-        to you until social features launch. You can remove it at any time from Profile.</li>
+        resized to 256&nbsp;pixels, compressed, and stored with your profile. You can remove it,
+        or change your username, at any time from Profile.</li>
+    <li><b>General location</b> — country, province/state/emirate, district and
+        tehsil/area, entered by you at signup or on your Profile. This is optional and is used
+        to show relevant tournaments, grounds and promotions in your area — never your precise
+        location, and never collected automatically from your device.</li>
     <li><b>Your cricket data</b> — matches, scorecards, teams, player names you type,
         tournaments and scheduled fixtures.</li>
+    <li><b>Friend connections and organiser applications</b> — if you send or accept a
+        friend request, or apply to run tournaments, that request and its status is stored
+        against your account.</li>
   </ul>
   <p>If you sign in with Google, Google provides your email address and name to the app.
   Cricket Connect never receives your Google password.</p>
 
   <h2>What is not collected</h2>
   <ul>
-    <li>No location data</li>
+    <li>No precise or device location — no GPS, and no automatic location detection. The
+        country/province/district/area fields above are optional, typed in by you, and only
+        as specific as you choose to make them</li>
     <li>No contacts, camera or microphone access. A profile photo is only read when you
         explicitly choose one from your gallery</li>
     <li>No advertising identifiers, and no third-party advertising or analytics trackers</li>
@@ -77,12 +87,14 @@
   </ul>
 
   <h2>Who processes the data</h2>
-  <p>Data is stored using <b>Google Firebase</b> (Authentication and Cloud Firestore), and
-  the site is hosted on <b>Vercel</b>. Both act as service providers. Their handling is
+  <p>Data is stored using <b>Supabase</b> (Authentication and a managed Postgres database),
+  and the site is hosted on <b>Vercel</b>. Both act as service providers. Their handling is
   governed by
-  <a href="https://firebase.google.com/support/privacy">Firebase's privacy terms</a> and
+  <a href="https://supabase.com/privacy">Supabase's privacy policy</a> and
   <a href="https://vercel.com/legal/privacy-policy">Vercel's privacy policy</a>.
-  Data is encrypted in transit using HTTPS.</p>
+  Data is encrypted in transit using HTTPS, and access to your account's private data
+  (matches, teams, tournaments) is restricted at the database level so only you — and,
+  for organiser-approval purposes only, platform admins — can read it.</p>
 
   <h2>Live match sharing</h2>
   <p>Live sharing is off by default and you switch it on per match. While it is on, that

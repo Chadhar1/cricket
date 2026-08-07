@@ -1936,24 +1936,69 @@ function exportData(){
 /* ---------------- install prompt & connectivity ---------------- */
 const LS_INSTALL_DISMISSED = 'cc_install_dismissed_v1';
 
+function iosInstallInstructions(){
+  openModal(`<h3>Install Cricket Connect</h3>
+    <div class="stat-dim" style="margin-bottom:10px;">Full screen, works with no signal at the ground.</div>
+    <div class="stat-dim">1. Tap the <b>Share</b> icon in Safari's toolbar</div>
+    <div class="stat-dim" style="margin-top:6px;">2. Scroll down and choose <b>"Add to Home Screen"</b></div>
+    <div class="stat-dim" style="margin-top:6px;">3. Tap <b>Add</b> — that's it</div>
+    <button class="btn secondary" style="margin-top:14px;" data-action="close">Got it</button>`);
+}
+
 function setupInstallPrompt(){
   const banner = $('installBanner');
   $('installMark').innerHTML = brandMark(34);
+  const card = $('installCard');
+  const rowBtn = $('installRowBtn');
 
-  window.addEventListener('beforeinstallprompt', (e)=>{
-    e.preventDefault();
-    deferredInstall = e;
+  // Already running as an installed app (either platform) — nothing to do,
+  // there's no "install" affordance to show.
+  const isStandalone = window.matchMedia('(display-mode: standalone)').matches
+    || window.navigator.standalone === true;
+  if(isStandalone) return;
+
+  // The dismissible top banner is easy to miss or swipe away, so the same
+  // action also lives permanently in Profile -> Get the app for anyone who
+  // wants to install later.
+  card.classList.remove('hidden');
+
+  // iOS Safari never fires `beforeinstallprompt` and has no programmatic
+  // install API at all — Apple only exposes it through the manual
+  // Share -> "Add to Home Screen" flow. Without this branch, iPhone/iPad
+  // users (a large share of visitors) never see any install prompt.
+  const isIOS = /iphone|ipad|ipod/i.test(navigator.userAgent) && !window.MSStream;
+
+  if(isIOS){
+    $('installBtn').classList.add('hidden');
+    $('installSub').textContent = 'Tap Share, then "Add to Home Screen"';
+    $('installRowSub').textContent = 'Tap Share, then "Add to Home Screen"';
+    rowBtn.addEventListener('click', iosInstallInstructions);
     if(!load(LS_INSTALL_DISMISSED, false)) banner.classList.remove('hidden');
-  });
+  } else {
+    rowBtn.addEventListener('click', async ()=>{
+      if(!deferredInstall){ toast('Open this in Chrome/Edge on your phone to install'); return; }
+      deferredInstall.prompt();
+      const { outcome } = await deferredInstall.userChoice;
+      deferredInstall = null;
+      banner.classList.add('hidden');
+      if(outcome === 'accepted') toast('Installing Cricket Connect');
+    });
 
-  $('installBtn').addEventListener('click', async ()=>{
-    if(!deferredInstall) return;
-    deferredInstall.prompt();
-    const { outcome } = await deferredInstall.userChoice;
-    deferredInstall = null;
-    banner.classList.add('hidden');
-    if(outcome === 'accepted') toast('Installing Cricket Connect');
-  });
+    window.addEventListener('beforeinstallprompt', (e)=>{
+      e.preventDefault();
+      deferredInstall = e;
+      if(!load(LS_INSTALL_DISMISSED, false)) banner.classList.remove('hidden');
+    });
+
+    $('installBtn').addEventListener('click', async ()=>{
+      if(!deferredInstall) return;
+      deferredInstall.prompt();
+      const { outcome } = await deferredInstall.userChoice;
+      deferredInstall = null;
+      banner.classList.add('hidden');
+      if(outcome === 'accepted') toast('Installing Cricket Connect');
+    });
+  }
 
   $('installDismiss').addEventListener('click', ()=>{
     banner.classList.add('hidden');
@@ -1962,6 +2007,7 @@ function setupInstallPrompt(){
 
   window.addEventListener('appinstalled', ()=>{
     banner.classList.add('hidden');
+    card.classList.add('hidden');
     save(LS_INSTALL_DISMISSED, true);
   });
 }

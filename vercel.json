@@ -43,7 +43,7 @@
       ]
     },
     {
-      "source": "/(index.html|live.html|app.js|engine.js|cloud.js|tournament.js|avatars.js|firebase-config.js|styles.css|manifest.json)",
+      "source": "/(index.html|live.html|app.js|engine.js|cloud.js|tournament.js|avatars.js|social.js|stats.js|supabase-config.js|styles.css|manifest.json)",
       "headers": [
         {
           "key": "Cache-Control",

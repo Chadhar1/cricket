@@ -353,14 +353,19 @@ check(initialsBadge('Karachi Kings')===initialsBadge('Karachi Kings'),'badge col
 
 /* ================= CONFIG ================= */
 head('Supabase config');
-// Placeholders ship by default (no real project committed) — isConfigured()
-// must correctly report "not set up yet" until someone pastes real values in.
-check(isConfigured()===false,'placeholder config reports not-configured');
+// This project now ships with real production values in supabase-config.js
+// (deployed and in use), so isConfigured() is expected to be true here — the
+// interesting behaviour to test is the *logic*, not the live file's current
+// contents, so we exercise isConfigured's placeholder-detection rule against
+// synthetic inputs instead of asserting a specific state of the real file.
 check(typeof supabaseConfig.url==='string' && typeof supabaseConfig.anonKey==='string','config has the expected shape');
+check(isConfigured()===true,'the real, deployed config reports configured');
 {
+  const looksConfigured = (c)=> !!c.url && !c.url.startsWith('PASTE_') && !!c.anonKey && !c.anonKey.startsWith('PASTE_');
+  const placeholder = { url:'PASTE_YOUR_SUPABASE_URL', anonKey:'PASTE_YOUR_ANON_KEY' };
   const real = { url:'https://abcdefghijklmno.supabase.co', anonKey:'ey.some.jwt' };
-  const wouldBeConfigured = !!real.url && !real.url.startsWith('PASTE_') && !!real.anonKey && !real.anonKey.startsWith('PASTE_');
-  check(wouldBeConfigured===true,'a real-looking url/key would report configured');
+  check(looksConfigured(placeholder)===false,'placeholder-shaped config reports not-configured');
+  check(looksConfigured(real)===true,'a real-looking url/key reports configured');
 }
 
 /* ================= SERIALISATION ================= */

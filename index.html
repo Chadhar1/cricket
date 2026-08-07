@@ -46,7 +46,7 @@
 
 <div class="install-banner hidden" id="installBanner">
   <span class="ib-mark" id="installMark"></span>
-  <div class="ib-txt"><b>Install Cricket Connect</b><span>Full screen, works without signal</span></div>
+  <div class="ib-txt"><b>Install Cricket Connect</b><span id="installSub">Full screen, works without signal</span></div>
   <button class="icon-btn" id="installBtn">Install</button>
   <button class="ib-x" id="installDismiss" aria-label="Dismiss install prompt">&times;</button>
 </div>
@@ -562,6 +562,16 @@
       <div class="who" id="authWho"><span class="dot offline"></span>Local only</div>
     </div>
     <button class="btn secondary" id="authActionBtn">Sign in</button>
+  </div>
+
+  <div class="card hidden" id="installCard">
+    <h2>Get the app</h2>
+    <button class="action-row-btn" id="installRowBtn">
+      <span class="arb-ico"><svg viewBox="0 0 24 24"><rect x="7" y="2" width="10" height="20" rx="2.2"/><path d="M11 18h2"/></svg></span>
+      <span class="arb-txt"><span class="arb-t" id="installRowTitle">Install Cricket Connect</span>
+        <span class="arb-s" id="installRowSub">Full screen, works without signal</span></span>
+      <span class="arb-go">&rsaquo;</span>
+    </button>
   </div>
 
   <div class="card">
