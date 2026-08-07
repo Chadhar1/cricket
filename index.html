@@ -163,6 +163,16 @@
     <div class="pc-go">&rsaquo;</div>
   </div>
 
+  <div class="card hidden" id="homeRewardsCard" data-action="go-profile" style="cursor:pointer;">
+    <div class="sec-head"><h2>Daily Rewards</h2><span class="badge live hidden" id="homeRewardsStreakBadge">0 day streak</span></div>
+    <div class="stat-strip">
+      <div class="stat-box"><div class="sv" id="homeRewardsPoints">0</div><div class="sl">Points</div></div>
+      <div class="stat-box"><div class="sv" id="homeRewardsStreak">0</div><div class="sl">Day streak</div></div>
+      <div class="stat-box"><div class="sv" id="homeRewardsBest">0</div><div class="sl">Best streak</div></div>
+    </div>
+    <div class="stat-dim" style="margin-top:8px;">Open the app once a day to keep your streak — points are redeemable in the Marketplace once it launches.</div>
+  </div>
+
   <div class="card hidden" id="homeAdminCard" data-action="go-admin" style="cursor:pointer;">
     <div class="sec-head"><h2>Admin</h2><span class="badge live" id="homeAdminPendingBadge">0 pending</span></div>
     <div class="stat-strip">
@@ -504,6 +514,11 @@
     <div class="avatar-big-wrap" id="profileAvatarBig" style="margin-bottom:10px;"></div>
     <div style="font-size:18px;font-weight:700;" id="profileName">Guest</div>
     <div class="stat-dim" id="profileEmail">Not signed in</div>
+    <div class="stat-strip hidden" id="profileRewardsStrip" style="margin-top:12px;">
+      <div class="stat-box"><div class="sv" id="profilePoints">0</div><div class="sl">Points</div></div>
+      <div class="stat-box"><div class="sv" id="profileStreak">0</div><div class="sl">Day streak</div></div>
+      <div class="stat-box"><div class="sv" id="profileBestStreak">0</div><div class="sl">Best streak</div></div>
+    </div>
   </div>
 
   <div class="card" id="profileEditCard">
@@ -642,7 +657,7 @@
     <div class="card">
       <h2>Find players</h2>
       <div class="row">
-        <input type="text" id="friendSearchInput" placeholder="Search by @username">
+        <input type="text" id="friendSearchInput" placeholder="Search by name or @username">
         <button class="btn small" style="width:auto;flex:0 0 auto;" id="friendSearchBtn">Search</button>
       </div>
       <div id="friendSearchResults"></div>

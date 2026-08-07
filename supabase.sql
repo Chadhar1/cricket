@@ -77,6 +77,16 @@ create table if not exists public.profiles (
   area          text not null default '' check (char_length(area) <= 60),    -- tehsil / famous locality
   is_organiser  boolean not null default false,
   is_admin      boolean not null default false,
+  -- Daily-login rewards. points is a future currency (redeemable once the
+  -- Marketplace exists) — like handle/is_admin/is_organiser below, none of
+  -- these four are in the owner's WITH CHECK allow-list, so the only way to
+  -- change them is through daily_check_in() (SECURITY DEFINER), never a
+  -- direct client update. That's what stops someone just upserting
+  -- {points: 999999} on their own profile.
+  points          integer not null default 0 check (points >= 0),
+  streak_current  integer not null default 0 check (streak_current >= 0),
+  streak_longest  integer not null default 0 check (streak_longest >= 0),
+  last_checkin    date,
   updated_at    timestamptz not null default now()
 );
 
@@ -103,12 +113,73 @@ create policy "owner can update their own profile, admin can update any"
       and handle is not distinct from (select handle from public.profiles where id = auth.uid())
       and is_admin = (select is_admin from public.profiles where id = auth.uid())
       and is_organiser = (select is_organiser from public.profiles where id = auth.uid())
+      and points = (select points from public.profiles where id = auth.uid())
+      and streak_current = (select streak_current from public.profiles where id = auth.uid())
+      and streak_longest = (select streak_longest from public.profiles where id = auth.uid())
+      and last_checkin is not distinct from (select last_checkin from public.profiles where id = auth.uid())
     )
   );
 
 create policy "owner or admin can delete a profile"
   on public.profiles for delete
   using (auth.uid() = id or public.is_admin());
+
+-- ---------------------------------------------------------------------------
+-- daily_check_in() — the only way points/streak on profiles ever change.
+-- Runs as SECURITY DEFINER so it can update columns the caller's own RLS
+-- policy blocks them from touching directly, but it decides everything
+-- itself from server-side current_date — the client passes no arguments and
+-- can't influence the amount awarded. Safe to call every time the app
+-- opens; a second call on the same day is a no-op (awarded = 0).
+--
+--   +10 points for any new day
+--   +50 bonus on a 7-day streak, +200 on 30, +1000 on 100
+--   a missed day resets the streak to 1, not to 0 (today still counts)
+-- ---------------------------------------------------------------------------
+create or replace function public.daily_check_in()
+returns table(points int, streak_current int, streak_longest int, awarded int, milestone int)
+language plpgsql
+security definer
+as $$
+declare
+  today date := current_date;
+  row public.profiles;
+  gained int := 10;
+  hit int := 0;
+begin
+  select * into row from public.profiles where id = auth.uid();
+  if row is null then
+    raise exception 'Profile not found';
+  end if;
+
+  if row.last_checkin = today then
+    return query select row.points, row.streak_current, row.streak_longest, 0, 0;
+    return;
+  end if;
+
+  if row.last_checkin = today - 1 then
+    row.streak_current := row.streak_current + 1;
+  else
+    row.streak_current := 1;
+  end if;
+
+  if row.streak_current = 7 then gained := gained + 50; hit := 7;
+  elsif row.streak_current = 30 then gained := gained + 200; hit := 30;
+  elsif row.streak_current = 100 then gained := gained + 1000; hit := 100;
+  end if;
+
+  update public.profiles set
+    points = points + gained,
+    streak_current = row.streak_current,
+    streak_longest = greatest(streak_longest, row.streak_current),
+    last_checkin = today,
+    updated_at = now()
+  where id = auth.uid()
+  returning * into row;
+
+  return query select row.points, row.streak_current, row.streak_longest, gained, hit;
+end;
+$$;
 
 -- ---------------------------------------------------------------------------
 -- private per-user data: matches, teams, tournaments, scheduled events.
@@ -357,6 +428,80 @@ begin
     );
   end loop;
 end $$;
+
+-- ---------------------------------------------------------------------------
+-- MIGRATION — daily login streak + points. Adds the columns, re-locks the
+-- owner-update policy so points/streak can only change through
+-- daily_check_in() below, and (re)creates that function. All idempotent —
+-- safe to run again.
+-- ---------------------------------------------------------------------------
+alter table public.profiles add column if not exists points         integer not null default 0 check (points >= 0);
+alter table public.profiles add column if not exists streak_current integer not null default 0 check (streak_current >= 0);
+alter table public.profiles add column if not exists streak_longest integer not null default 0 check (streak_longest >= 0);
+alter table public.profiles add column if not exists last_checkin   date;
+
+drop policy if exists "owner can update their own profile, admin can update any" on public.profiles;
+create policy "owner can update their own profile, admin can update any"
+  on public.profiles for update
+  using (auth.uid() = id or public.is_admin())
+  with check (
+    public.is_admin()
+    or (
+      auth.uid() = id
+      and handle is not distinct from (select handle from public.profiles where id = auth.uid())
+      and is_admin = (select is_admin from public.profiles where id = auth.uid())
+      and is_organiser = (select is_organiser from public.profiles where id = auth.uid())
+      and points = (select points from public.profiles where id = auth.uid())
+      and streak_current = (select streak_current from public.profiles where id = auth.uid())
+      and streak_longest = (select streak_longest from public.profiles where id = auth.uid())
+      and last_checkin is not distinct from (select last_checkin from public.profiles where id = auth.uid())
+    )
+  );
+
+create or replace function public.daily_check_in()
+returns table(points int, streak_current int, streak_longest int, awarded int, milestone int)
+language plpgsql
+security definer
+as $$
+declare
+  today date := current_date;
+  row public.profiles;
+  gained int := 10;
+  hit int := 0;
+begin
+  select * into row from public.profiles where id = auth.uid();
+  if row is null then
+    raise exception 'Profile not found';
+  end if;
+
+  if row.last_checkin = today then
+    return query select row.points, row.streak_current, row.streak_longest, 0, 0;
+    return;
+  end if;
+
+  if row.last_checkin = today - 1 then
+    row.streak_current := row.streak_current + 1;
+  else
+    row.streak_current := 1;
+  end if;
+
+  if row.streak_current = 7 then gained := gained + 50; hit := 7;
+  elsif row.streak_current = 30 then gained := gained + 200; hit := 30;
+  elsif row.streak_current = 100 then gained := gained + 1000; hit := 100;
+  end if;
+
+  update public.profiles set
+    points = points + gained,
+    streak_current = row.streak_current,
+    streak_longest = greatest(streak_longest, row.streak_current),
+    last_checkin = today,
+    updated_at = now()
+  where id = auth.uid()
+  returning * into row;
+
+  return query select row.points, row.streak_current, row.streak_longest, gained, hit;
+end;
+$$;
 
 -- ---------------------------------------------------------------------------
 -- Bootstrap: run this yourself once, after you've signed up in the app, to

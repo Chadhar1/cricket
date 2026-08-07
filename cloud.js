@@ -165,7 +165,9 @@ function toAppProfile(row){
     uid: row.id, handle: row.handle, displayName: row.display_name, avatarId: row.avatar_id,
     photo: row.photo || undefined,
     bio: row.bio, isOrganiser: row.is_organiser, isAdmin: row.is_admin, updatedAt: row.updated_at,
-    country: row.country || '', region: row.region || '', district: row.district || '', area: row.area || ''
+    country: row.country || '', region: row.region || '', district: row.district || '', area: row.area || '',
+    points: row.points || 0, streakCurrent: row.streak_current || 0,
+    streakLongest: row.streak_longest || 0, lastCheckin: row.last_checkin || null
   };
 }
 
@@ -199,13 +201,24 @@ export async function saveMyPublicProfile({ handle, displayName, avatarId, bio }
   return { ok:true };
 }
 
-export async function searchProfilesByHandle(prefix, max = 15){
+/* Matches on @handle (prefix, e.g. "har" -> "haris_23") OR display name
+   (contains, e.g. "har" -> "Haris Khan") in one query — most people search
+   for someone by the name they actually know them by, not their handle. */
+export async function searchProfiles(query, max = 15){
   if(!ready) return [];
-  const p = String(prefix || '').trim().toLowerCase().replace(/^@/, '');
-  if(!p) return [];
+  const raw = String(query || '').trim();
+  if(!raw) return [];
+  // Postgrest .or() takes one comma-separated filter string, so strip
+  // characters that would either break that syntax or be meaningless in
+  // an ilike pattern anyway.
+  const safe = raw.replace(/[,%]/g, '').trim();
+  if(!safe) return [];
+  const handleTerm = safe.toLowerCase().replace(/^@/, '');
   const { data, error } = await sb.from('profiles')
-    .select('*').ilike('handle', p + '%').limit(max);
-  if(error){ console.error('searchProfilesByHandle failed:', error); return []; }
+    .select('*')
+    .or(`handle.ilike.${handleTerm}%,display_name.ilike.%${safe}%`)
+    .limit(max);
+  if(error){ console.error('searchProfiles failed:', error); return []; }
   return data.map(toAppProfile).filter(pr=>pr.uid !== (currentUser && currentUser.id));
 }
 
@@ -357,6 +370,23 @@ export async function fetchPlatformStats(){
     countAllIn('tournaments'), countAllIn('matches')
   ]);
   return { tournaments, matches };
+}
+
+/* ---------------- daily rewards ----------------
+   All the logic (streak math, points, once-per-day) lives server-side in
+   daily_check_in() — see supabase.sql. This just calls it and returns
+   whatever it decided. Safe to call every app open; a repeat call on the
+   same day comes back with awarded:0. */
+export async function dailyCheckIn(){
+  if(!ready || !currentUser) return null;
+  const { data, error } = await sb.rpc('daily_check_in');
+  if(error){ console.error('dailyCheckIn failed:', error); return null; }
+  const row = Array.isArray(data) ? data[0] : data;
+  if(!row) return null;
+  return {
+    points: row.points, streakCurrent: row.streak_current,
+    streakLongest: row.streak_longest, awarded: row.awarded, milestone: row.milestone
+  };
 }
 
 export async function fetchPlatformTournaments(max = 100){

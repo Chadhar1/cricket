@@ -37,12 +37,12 @@ import {
   saveTournament, fetchTournaments, deleteTournament,
   saveEvent, fetchEvents, deleteEvent,
   pushLive, pushLiveNow, stopLive,
-  fetchMyPublicProfile, fetchPublicProfile, saveMyPublicProfile, searchProfilesByHandle,
+  fetchMyPublicProfile, fetchPublicProfile, saveMyPublicProfile, searchProfiles,
   fetchMyConnections, sendConnectionRequest, respondToConnection, removeConnection,
   submitOrganiserApplication, fetchMyOrganiserApplications,
   isCurrentUserAdmin, fetchPendingOrganiserApplications, countOrganisers,
   approveOrganiserApplication, rejectOrganiserApplication,
-  fetchPlatformStats, fetchPlatformTournaments
+  fetchPlatformStats, fetchPlatformTournaments, dailyCheckIn
 } from './cloud.js';
 
 import {
@@ -353,6 +353,12 @@ function renderProfile(){
   $('profileName').textContent = displayName();
   const u = getUser();
   $('profileEmail').textContent = u ? (u.email || 'Signed in') : 'Not signed in';
+  $('profileRewardsStrip').classList.toggle('hidden', !myPublicProfile);
+  if(myPublicProfile){
+    $('profilePoints').textContent = myPublicProfile.points || 0;
+    $('profileStreak').textContent = myPublicProfile.streakCurrent || 0;
+    $('profileBestStreak').textContent = myPublicProfile.streakLongest || 0;
+  }
   $('profileNameInput').value = profile.displayName || (u && u.displayName) || '';
   $('profileHandleInput').value = (myPublicProfile && myPublicProfile.handle) || '';
   // local `profile` wins over myPublicProfile here (not the other way like
@@ -491,7 +497,7 @@ function renderFriends(){
 async function doFriendSearch(){
   const q = $('friendSearchInput').value.trim();
   if(!q){ friendResults = []; renderFriends(); return; }
-  friendResults = await searchProfilesByHandle(q);
+  friendResults = await searchProfiles(q);
   await resolveProfiles(friendResults.map(p=>p.uid));
   renderFriends();
 }
@@ -555,6 +561,23 @@ async function submitApplyOrganiser(){
 }
 
 /* ---------------- ADMIN ---------------- */
+
+/* ---------------- daily rewards ----------------
+   Called once per sign-in — daily_check_in() is cheap and idempotent
+   server-side, so there's no need to pre-check the date on the client (and
+   it sidesteps any client/server timezone mismatch near midnight). */
+async function runDailyCheckIn(){
+  const reward = await dailyCheckIn();
+  if(!reward || !myPublicProfile) return;
+  myPublicProfile.points = reward.points;
+  myPublicProfile.streakCurrent = reward.streakCurrent;
+  myPublicProfile.streakLongest = reward.streakLongest;
+  if(reward.awarded > 0){
+    if(reward.milestone) toast(reward.milestone + '-day streak! +' + reward.awarded + ' points \u{1F525}');
+    else toast('Day ' + reward.streakCurrent + ' streak — +' + reward.awarded + ' points');
+  }
+  renderHome(); renderProfile();
+}
 
 async function refreshAdminData(){
   if(!isAdminUser) return;
@@ -657,6 +680,17 @@ function renderHome(){
     $('resumeSub').textContent = teamName(match, inn.battingTeam) + ' ' + inn.runs + '/' + inn.wickets +
       ' (' + fmtOvers(inn.legalBalls) + '/' + match.oversLimit + ' ov)';
   } else rb.classList.add('hidden');
+
+  const rewardsCard = $('homeRewardsCard');
+  rewardsCard.classList.toggle('hidden', !myPublicProfile);
+  if(myPublicProfile){
+    $('homeRewardsPoints').textContent = myPublicProfile.points || 0;
+    $('homeRewardsStreak').textContent = myPublicProfile.streakCurrent || 0;
+    $('homeRewardsBest').textContent = myPublicProfile.streakLongest || 0;
+    const badge = $('homeRewardsStreakBadge');
+    badge.textContent = (myPublicProfile.streakCurrent || 0) + ' day streak';
+    badge.classList.toggle('hidden', !myPublicProfile.streakCurrent);
+  }
 
   const adminCard = $('homeAdminCard');
   adminCard.classList.toggle('hidden', !isAdminUser);
@@ -2308,6 +2342,7 @@ async function boot(){
         $('sideAdminBtn').classList.toggle('hidden', !isAdminUser);
         await refreshFriendsData();
         if(isAdminUser) await refreshAdminData();
+        await runDailyCheckIn();
       } else {
         cloudMatches = [];
         myPublicProfile = null; isAdminUser = false; myConnections = []; pendingApps = [];
