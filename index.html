@@ -147,9 +147,9 @@
   </div>
 
   <section class="hero">
-    <div class="hero-kicker">Gully to Gallery.</div>
-    <h1>One platform.<span>Every cricketer.</span></h1>
-    <p>Connect with players, build teams, and join tournaments — score ball by ball, and share a live link so anyone can follow along.</p>
+    <div class="hero-kicker" id="heroKicker">Gully to Gallery.</div>
+    <h1 id="heroHeading">One platform.<span>Every cricketer.</span></h1>
+    <p id="heroSub">Connect with players, build teams, and join tournaments — score ball by ball, and share a live link so anyone can follow along.</p>
     <div class="hero-actions">
       <button class="btn secondary" id="heroFindTournaments">Find Tournaments</button>
       <button class="btn secondary" id="heroFindPlayers">Find Players</button>
@@ -158,17 +158,43 @@
     <div class="hero-stats" id="heroStats"></div>
   </section>
 
+  <!-- ============ Next match ============ -->
+  <div class="card" id="homeNextMatchCard">
+    <div class="sec-head"><h2>Next Match</h2></div>
+    <div id="nextMatchBox"></div>
+  </div>
+
   <div class="qa-rail" id="qaRail"></div>
+
+  <!-- ============ My cricket stats (real career record, matched by display name) ============ -->
+  <div class="card" id="homeMyStatsCard">
+    <div class="sec-head"><h2>Your Cricket Stats</h2>
+      <button class="icon-btn" id="homeStatsSeeAll">Full records</button>
+    </div>
+    <div class="stat-strip" id="myStatsStrip"></div>
+    <div class="stat-dim" id="myStatsNote" style="margin-top:2px;"></div>
+  </div>
 
   <!-- ============ Featured tournaments (real: your own, honest about the rest) ============ -->
   <div class="card" id="homeTournamentsCard">
-    <div class="sec-head"><h2>Your Tournaments</h2>
+    <div class="sec-head"><h2>My Tournaments</h2>
       <button class="icon-btn" id="homeTournamentsSeeAll">See all</button>
     </div>
     <div id="homeTournamentsRail"></div>
     <div class="stat-dim" style="margin-top:10px;">
       Public tournament discovery — browsing tournaments you haven't joined — is on the roadmap.
       For now, tournaments you create or join show up here.
+    </div>
+  </div>
+
+  <!-- ============ Recommended tournaments (honest placeholder — no public
+       discovery data exists yet; see homeTournamentsCard note above) ============ -->
+  <div class="card" id="homeRecommendedCard">
+    <div class="sec-head"><h2>Recommended Tournaments</h2></div>
+    <div class="stat-dim">
+      Personalised recommendations need public tournament discovery, which isn't built yet
+      (tournaments are private to their owner today). Once that lands, tournaments near you
+      or matching your role will show up here.
     </div>
   </div>
 
@@ -255,10 +281,16 @@
 
   <!-- ============ Your teams (team discovery equivalent) ============ -->
   <div class="card" id="homeTeamsCard">
-    <div class="sec-head"><h2>Your Teams</h2>
+    <div class="sec-head"><h2>My Teams</h2>
       <button class="icon-btn" id="homeTeamsSeeAll">See all</button>
     </div>
     <div id="homeTeamsRail"></div>
+  </div>
+
+  <!-- ============ Achievements (real, computed from your actual data) ============ -->
+  <div class="card" id="homeAchievementsCard">
+    <div class="sec-head"><h2>Achievements</h2></div>
+    <div class="ach-grid" id="achGrid"></div>
   </div>
 
   <div class="quick-grid" style="margin-bottom:14px;">

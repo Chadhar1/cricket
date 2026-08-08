@@ -24,7 +24,8 @@ import { AVATARS, DEFAULT_AVATAR, avatarSVG, initialsBadge, brandMark, brandLock
 
 import {
   buildCareers, topRunScorers, topWicketTakers, bestAverages, bestEconomy,
-  bestBattingPerformances, bestBowlingPerformances, teamRecords, overallSummary
+  bestBattingPerformances, bestBowlingPerformances, teamRecords, overallSummary,
+  findPlayer
 } from './stats.js';
 
 import {
@@ -682,7 +683,8 @@ const QA = [
   { id:'qaTour2',      label:'Tournaments',   sub:'Tables & cups',   icon:'<path d="M6 4h12v5a6 6 0 01-12 0z"/><path d="M6 6H3v2a4 4 0 004 4M18 6h3v2a4 4 0 01-4 4"/><path d="M10 19h4M12 15v4"/>', go:'tournaments' },
   { id:'qaStats2',     label:'Rankings',      sub:'Career records',  icon:'<path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/>', go:'stats' },
   { id:'qaSched2',     label:'Schedule',      sub:'Fixtures',        icon:'<rect x="3" y="5" width="18" height="16" rx="2"/><path d="M8 3v4M16 3v4M3 10h18"/>', act:'schedule' },
-  { id:'qaHist2',      label:'History',       sub:'Past results',    icon:'<path d="M3 12a9 9 0 109-9 9 9 0 00-6.4 2.6L3 8"/><path d="M3 4v4h4M12 7v5l3 2"/>', go:'history' }
+  { id:'qaHist2',      label:'History',       sub:'Past results',    icon:'<path d="M3 12a9 9 0 109-9 9 9 0 00-6.4 2.6L3 8"/><path d="M3 4v4h4M12 7v5l3 2"/>', go:'history' },
+  { id:'qaFriends2',   label:'Find Players',  sub:'Search & connect', icon:'<circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/>', go:'friends' }
 ];
 
 function renderHeroAndRail(){
@@ -703,6 +705,87 @@ function renderHeroAndRail(){
        <span class="qa-ico"><svg viewBox="0 0 24 24">${q.icon}</svg></span>
        <b>${esc(q.label)}</b><span>${esc(q.sub)}</span>
      </button>`).join('');
+
+  // Welcome header — real, signed-in users only; guests keep the pitch copy.
+  const u = getUser();
+  if(u){
+    const first = (displayName() || 'there').split(' ')[0];
+    $('heroKicker').textContent = 'Welcome back';
+    $('heroHeading').innerHTML = `Hi, ${esc(first)} <span style="display:inline;">&#128075;</span>`;
+    const bits = [];
+    bits.push(ms.length + (ms.length === 1 ? ' match played' : ' matches played'));
+    if(teams.length) bits.push(teams.length + (teams.length === 1 ? ' team' : ' teams'));
+    if(tournaments.length) bits.push(tournaments.length + (tournaments.length === 1 ? ' tournament' : ' tournaments'));
+    $('heroSub').textContent = bits.join(' · ') + ' — here\'s where things stand.';
+  } else {
+    $('heroKicker').textContent = 'Gully to Gallery.';
+    $('heroHeading').innerHTML = 'One platform.<span>Every cricketer.</span>';
+    $('heroSub').textContent = 'Connect with players, build teams, and join tournaments — score ball by ball, and share a live link so anyone can follow along.';
+  }
+}
+
+/* Next match = the single soonest upcoming item, reusing the same real
+   source as the Upcoming widget (scheduled events + dated fixtures). */
+function renderNextMatch(){
+  const box = $('nextMatchBox');
+  const next = upcomingItems(1)[0];
+  if(!next){
+    box.innerHTML = `<div class="empty-note">No upcoming matches.</div>
+      <button class="btn secondary" id="nextMatchCta" style="margin-top:2px;">Find a Tournament</button>`;
+    $('nextMatchCta').addEventListener('click', ()=>go('tournaments'));
+    return;
+  }
+  const d = next.date ? new Date(next.date) : null;
+  const today = d ? dayStart(d) === dayStart(new Date()) : false;
+  box.innerHTML = `
+    <div class="next-match">
+      <div class="nm-teams">${esc(next.title || 'Match')}</div>
+      <div class="nm-meta">${today ? 'Today' : esc(fmtWhen(next.date))}${next.venue ? ' &middot; ' + esc(next.venue) : ''}</div>
+      ${next.badge ? `<div class="nm-badge">${esc(next.badge)}</div>` : ''}
+    </div>`;
+}
+
+/* My cricket stats — real career record, matched by display name against
+   ball-by-ball data already saved from completed matches. No fabricated
+   numbers: if the name has never been used to score a match, every field
+   is an honest zero, and Player Rating stays a clear "coming soon" (there's
+   no rating model yet — same honesty line as the marketing site). */
+function renderMyStats(){
+  const careers = buildCareers(mergedHistory().filter(m=>m.completed));
+  const mine = findPlayer(careers, displayName());
+  const cells = [
+    { v: mine ? mine.matches : 0,  l: 'Matches' },
+    { v: mine ? mine.runs : 0,     l: 'Runs' },
+    { v: mine ? mine.wickets : 0,  l: 'Wickets' },
+    { v: '—',                      l: 'Rating' }
+  ];
+  $('myStatsStrip').innerHTML = cells.map(c=>
+    `<div class="stat-box"><div class="sv">${c.v}</div><div class="sl">${esc(c.l)}</div></div>`).join('');
+  $('myStatsNote').textContent = mine
+    ? 'Matched from matches scored under your display name. Player Rating is on the roadmap.'
+    : "No matches scored under your display name yet — score a match to start your record.";
+}
+
+/* Achievements — real, computed from data that already exists. Locked
+   badges are an honest "not yet", not a fake progress bar. */
+function renderAchievements(){
+  const careers = buildCareers(mergedHistory().filter(m=>m.completed));
+  const mine = findPlayer(careers, displayName());
+  const streak = (myPublicProfile && myPublicProfile.streakLongest) || 0;
+  const badges = [
+    { id:'first-match', label:'First Match', icon:'<rect x="3" y="4" width="18" height="14" rx="2"/><path d="M7 9h4M7 13h7"/>', on: mergedHistory().some(m=>m.completed) },
+    { id:'first-team', label:'First Team', icon:'<circle cx="9" cy="8" r="3"/><path d="M3 20v-1a5 5 0 015-5h2a5 5 0 015 5v1"/>', on: teams.length > 0 },
+    { id:'first-tournament', label:'First Tournament', icon:'<path d="M6 4h12v5a6 6 0 01-12 0z"/><path d="M10 19h4M12 15v4"/>', on: tournaments.length > 0 },
+    { id:'streak-7', label:'7-Day Streak', icon:'<path d="M12 2s6 5.5 6 11a6 6 0 11-12 0c0-2 1-3.5 2-5 .5 2 1.5 2.5 1.5 2.5C9 7 12 2 12 2z"/>', on: streak >= 7 },
+    { id:'streak-30', label:'30-Day Streak', icon:'<path d="M12 2s6 5.5 6 11a6 6 0 11-12 0c0-2 1-3.5 2-5 .5 2 1.5 2.5 1.5 2.5C9 7 12 2 12 2z"/>', on: streak >= 30 },
+    { id:'century', label:'Century Scorer', icon:'<circle cx="12" cy="12" r="9"/><path d="M9 12l2 2 4-4"/>', on: !!(mine && mine.hundreds > 0) },
+    { id:'five-wickets', label:'5-Wicket Haul', icon:'<circle cx="12" cy="12" r="9"/><path d="M9 12l2 2 4-4"/>', on: !!(mine && mine.fiveFers > 0) }
+  ];
+  $('achGrid').innerHTML = badges.map(b=>`
+    <div class="ach-badge ${b.on ? 'on' : ''}" title="${b.on ? 'Unlocked' : 'Not yet unlocked'}">
+      <span class="ach-ico"><svg viewBox="0 0 24 24">${b.icon}</svg></span>
+      <span class="ach-l">${esc(b.label)}</span>
+    </div>`).join('');
 }
 
 function renderHome(){
@@ -749,6 +832,9 @@ function renderHome(){
   renderRecent();
   renderHomeTournaments();
   renderHomeTeams();
+  renderNextMatch();
+  renderMyStats();
+  renderAchievements();
   $('homeGuestCta').classList.toggle('hidden', !!u);
 }
 
@@ -2224,6 +2310,7 @@ function bind(){
   $('homeFindPlayersBtn').addEventListener('click', ()=>go('friends'));
   $('homeTournamentsSeeAll').addEventListener('click', ()=>go('tournaments'));
   $('homeTeamsSeeAll').addEventListener('click', ()=>go('teams'));
+  $('homeStatsSeeAll').addEventListener('click', ()=>go('stats'));
   $('homeCtaSignIn').addEventListener('click', ()=>go('auth'));
   $('fabNew').addEventListener('click', ()=>{
     if(match && !match.completed) go('live');
