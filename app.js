@@ -157,14 +157,17 @@ function requiresAccount(){ return cloudReady(); }
 /* ---------------- navigation ---------------- */
 const SCREENS = ['auth','home','setup','live','result','history','teams','tournaments','tournament','stats','profile','friends','admin'];
 const TAB_OF = { home:'home', tournaments:'tournaments', tournament:'tournaments',
-                 teams:'teams', stats:'stats', history:'stats', profile:'profile',
+                 teams:'teams', stats:'profile', history:'history', profile:'profile',
                  friends:'friends', admin:'admin' };
 
 function go(s){ screen = s; render(); window.scrollTo(0,0); }
 
 function showScreen(name){
+  const isLive = match && !match.completed;
   const lp = $('sideLive');
-  if(lp) lp.style.display = (match && !match.completed) ? '' : 'none';
+  if(lp) lp.style.display = isLive ? '' : 'none';
+  const tl = $('tabLive');
+  if(tl) tl.style.display = isLive ? '' : 'none';
   SCREENS.forEach(s=>{
     const el = $('screen-' + s);
     if(el) el.classList.toggle('hidden', s !== name);
@@ -184,6 +187,45 @@ function paintBrandMarks(){
   document.querySelectorAll('[data-brandmark]').forEach(el=>{
     if(!el.dataset.painted){ el.innerHTML = brandMark(34); el.dataset.painted = '1'; }
   });
+}
+
+/* ---------------- Desktop sidebar account menu ----------------
+   Guest: Login / Create account.
+   Signed in: Dashboard, My Profile, My Teams, My Tournaments, Rankings,
+   Settings, Logout. Only rendered/used at the desktop (>=1024px) sidebar —
+   mobile reaches the same destinations via the Profile screen itself. */
+function renderSidebarAccount(){
+  const u = getUser();
+  $('saAvatar').innerHTML = avatarHTML(30);
+  $('saName').textContent = u ? displayName() : 'Guest';
+  $('saSub').textContent = !cloudReady() ? 'Local only'
+    : u ? 'Signed in' : 'Not signed in';
+
+  const menu = $('saMenu');
+  if(u){
+    menu.innerHTML = `
+      <button data-sa="home">Dashboard</button>
+      <button data-sa="profile">My Profile</button>
+      <button data-sa="teams">My Teams</button>
+      <button data-sa="tournaments">My Tournaments</button>
+      <button data-sa="stats">Rankings</button>
+      <button data-sa="settings">Settings</button>
+      <button data-sa="logout" class="sa-danger">Logout</button>`;
+  } else {
+    menu.innerHTML = `
+      <button data-sa="login">Login</button>
+      <button data-sa="signup">Create account</button>`;
+  }
+  menu.querySelectorAll('[data-sa]').forEach(b=>
+    b.addEventListener('click', ()=>{
+      menu.classList.add('hidden');
+      const action = b.dataset.sa;
+      if(action === 'logout'){ signOutUser().then(()=>{ toast('Signed out'); go('auth'); }); return; }
+      if(action === 'login'){ setAuthMode('signin'); go('auth'); return; }
+      if(action === 'signup'){ setAuthMode('signup'); go('auth'); return; }
+      if(action === 'settings'){ go('profile'); return; }
+      go(action);
+    }));
 }
 
 function renderAuth(){
@@ -2113,6 +2155,7 @@ const GATED = {
 
 function render(){
   paintBrandMarks();
+  renderSidebarAccount();
 
   /* Anyone without an account is sent to the sign-in screen. */
   if(requiresAccount() && !isSignedIn() && GATED[screen]){
@@ -2151,6 +2194,16 @@ function bind(){
       if(target === 'friends') refreshFriendsData().then(renderFriends);
       else if(target === 'admin') refreshAdminData().then(renderAdmin);
     }));
+
+  // desktop sidebar account dropdown
+  $('saChipBtn').addEventListener('click', (e)=>{
+    e.stopPropagation();
+    $('saMenu').classList.toggle('hidden');
+  });
+  document.addEventListener('click', (e)=>{
+    const acc = $('sidebarAccount');
+    if(!acc.contains(e.target)) $('saMenu').classList.add('hidden');
+  });
 
   // auth
   $('segSignIn').addEventListener('click', ()=>setAuthMode('signin'));

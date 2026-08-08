@@ -305,9 +305,11 @@ table.sc-table td.num, table.sc-table th.num{text-align:right;}
   padding-bottom:env(safe-area-inset-bottom);
 }
 .tabbar button{
+  position:relative;
   flex:1; background:none; border:none; color:var(--ink-dim); font-family:inherit;
   padding:9px 2px 8px; font-size:10px; font-weight:600; cursor:pointer;
   display:flex; flex-direction:column; align-items:center; gap:3px; letter-spacing:0.3px;
+  transition:color .15s ease;
 }
 .tabbar button svg{width:21px; height:21px; fill:none; stroke:currentColor; stroke-width:1.9; stroke-linecap:round; stroke-linejoin:round;}
 .tabbar button.active{color:var(--gold-soft);}
@@ -760,6 +762,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, .chip:focus-vis
   display:flex; align-items:center; gap:12px; width:100%; text-align:left;
   background:none; border:none; color:var(--ink-dim); font-family:inherit;
   font-size:14px; font-weight:500; padding:11px 13px; border-radius:11px; cursor:pointer;
+  transition:background-color .15s ease, color .15s ease;
 }
 .sidenav button svg{width:19px;height:19px;fill:none;stroke:currentColor;stroke-width:1.9;
   stroke-linecap:round;stroke-linejoin:round;flex-shrink:0;}
@@ -776,6 +779,50 @@ button:focus-visible, input:focus-visible, select:focus-visible, .chip:focus-vis
 }
 .sidebar-promo .sp-t{font-size:14px; font-weight:600; margin-bottom:4px;}
 .sidebar-promo .sp-s{font-size:11.5px; color:var(--ink-dim); line-height:1.6;}
+
+/* ---- Sidebar account menu (desktop) ---- */
+.sidebar-account{position:relative; margin-top:12px;}
+.sa-chip{
+  display:flex; align-items:center; gap:10px; width:100%; text-align:left;
+  background:var(--bg-2); border:1px solid var(--line); border-radius:13px;
+  padding:9px 11px; cursor:pointer; font-family:inherit; color:var(--ink);
+  transition:border-color .15s ease;
+}
+.sa-chip:hover{border-color:var(--acc);}
+.sa-av{flex-shrink:0; display:flex; border-radius:50%; overflow:hidden;}
+.sa-txt{flex:1; min-width:0;}
+.sa-name{display:block; font-size:13px; font-weight:600; white-space:nowrap;
+  overflow:hidden; text-overflow:ellipsis;}
+.sa-sub{display:block; font-size:10.5px; color:var(--ink-dim); margin-top:1px;}
+.sa-chev{flex-shrink:0; stroke:var(--ink-dim); fill:none; stroke-width:2; stroke-linecap:round; stroke-linejoin:round;}
+.sa-menu{
+  position:absolute; left:0; right:0; bottom:calc(100% + 8px); z-index:5;
+  background:var(--bg-2); border:1px solid var(--line-2); border-radius:14px;
+  padding:6px; box-shadow:0 12px 32px -8px rgba(0,0,0,.55);
+  display:flex; flex-direction:column; gap:1px;
+  animation:sa-pop .15s ease;
+}
+.sa-menu.hidden{display:none;}
+@keyframes sa-pop{from{opacity:0; transform:translateY(4px);} to{opacity:1; transform:translateY(0);}}
+.sa-menu button{
+  display:block; width:100%; text-align:left; background:none; border:none;
+  color:var(--ink-2); font-family:inherit; font-size:13.5px; font-weight:500;
+  padding:9px 11px; border-radius:9px; cursor:pointer; transition:background-color .12s ease;
+}
+.sa-menu button:hover{background:var(--bg-3); color:var(--ink);}
+.sa-menu button.sa-danger{color:#fca5a5;}
+.sa-menu button.sa-danger:hover{background:rgba(239,68,68,.12);}
+
+/* small live-status dot for the mobile tab bar (space-constrained) —
+   sits on the icon's top-right corner rather than stacking in the column
+   flex layout, so it reads as a notification dot, not a second label row. */
+.pill-live.mini{
+  position:absolute; top:5px; left:calc(50% + 6px);
+  width:7px; height:7px; padding:0; border-radius:50%;
+  background:var(--live);
+  box-shadow:0 0 0 2px var(--bg-0);
+  animation:pulse 1.4s infinite;
+}
 
 /* ---- Hero banner ---- */
 .hero{
