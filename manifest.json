@@ -2,7 +2,7 @@
   "id": "/index.html",
   "name": "Cricket Connect",
   "short_name": "Connect",
-  "description": "Connecting cricket. Creating champions. Live ball-by-ball scoring, teams, tournaments, career stats and shareable live links.",
+  "description": "Gully to Gallery. Live ball-by-ball scoring, teams, tournaments, career stats and shareable live links.",
   "start_url": "./index.html",
   "scope": "./",
   "display": "standalone",
@@ -12,8 +12,8 @@
     "browser"
   ],
   "orientation": "portrait",
-  "background_color": "#080b0a",
-  "theme_color": "#080b0a",
+  "background_color": "#060b14",
+  "theme_color": "#060b14",
   "lang": "en",
   "dir": "ltr",
   "categories": [
