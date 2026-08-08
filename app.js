@@ -705,6 +705,47 @@ function renderHome(){
 
   renderEventsWidget();
   renderRecent();
+  renderHomeTournaments();
+  renderHomeTeams();
+  $('homeGuestCta').classList.toggle('hidden', !!u);
+}
+
+function renderHomeTournaments(){
+  const box = $('homeTournamentsRail');
+  if(!tournaments.length){
+    box.innerHTML = `<div class="empty-note">No tournaments yet.<br>Create one to get a table, fixtures and knockouts.</div>`;
+    return;
+  }
+  box.innerHTML = `<div class="mini-rail">` +
+    tournaments.slice(0, 8).map(t=>`
+      <button class="mini-card" data-home-tournament>
+        <div class="mc-t">${esc(t.name)}</div>
+        <div class="mc-s">${t.teams.length} team${t.teams.length === 1 ? '' : 's'}</div>
+      </button>`).join('') +
+    `<button class="mini-card add" data-home-tournament>
+      <span style="font-size:20px;line-height:1;">+</span><span style="font-size:11px;">New</span>
+    </button></div>`;
+  box.querySelectorAll('[data-home-tournament]').forEach(b=>
+    b.addEventListener('click', ()=>go('tournaments')));
+}
+
+function renderHomeTeams(){
+  const box = $('homeTeamsRail');
+  if(!teams.length){
+    box.innerHTML = `<div class="empty-note">No teams yet.<br>Build a squad to get started.</div>`;
+    return;
+  }
+  box.innerHTML = `<div class="mini-rail">` +
+    teams.slice(0, 8).map(t=>`
+      <button class="mini-card" data-home-team>
+        <div class="mc-t">${esc(t.name)}</div>
+        <div class="mc-s">${t.players.length} player${t.players.length === 1 ? '' : 's'}</div>
+      </button>`).join('') +
+    `<button class="mini-card add" data-home-team>
+      <span style="font-size:20px;line-height:1;">+</span><span style="font-size:11px;">New</span>
+    </button></div>`;
+  box.querySelectorAll('[data-home-team]').forEach(b=>
+    b.addEventListener('click', ()=>go('teams')));
 }
 
 /* Upcoming = scheduled events + dated tournament fixtures, merged and sorted. */
@@ -2124,8 +2165,13 @@ function bind(){
   $('resumeBanner').addEventListener('click', ()=>go('live'));
   $('addEventBtn').addEventListener('click', ()=>openScheduleModal());
   $('qaNewMatch').addEventListener('click', ()=>{ setupPrefill = null; go('setup'); });
-  $('heroScore').addEventListener('click', ()=>{ setupPrefill = null; go('setup'); });
-  $('heroTournament').addEventListener('click', ()=>go('tournaments'));
+  $('heroFindTournaments').addEventListener('click', ()=>go('tournaments'));
+  $('heroFindPlayers').addEventListener('click', ()=>go('friends'));
+  $('heroCreateTournament').addEventListener('click', ()=>go('tournaments'));
+  $('homeFindPlayersBtn').addEventListener('click', ()=>go('friends'));
+  $('homeTournamentsSeeAll').addEventListener('click', ()=>go('tournaments'));
+  $('homeTeamsSeeAll').addEventListener('click', ()=>go('teams'));
+  $('homeCtaSignIn').addEventListener('click', ()=>go('auth'));
   $('fabNew').addEventListener('click', ()=>{
     if(match && !match.completed) go('live');
     else { setupPrefill = null; go('setup'); }

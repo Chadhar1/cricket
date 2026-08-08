@@ -138,13 +138,63 @@
     <h1>One platform.<span>Every cricketer.</span></h1>
     <p>Connect with players, build teams, and join tournaments — score ball by ball, and share a live link so anyone can follow along.</p>
     <div class="hero-actions">
-      <button class="btn" id="heroScore">Start scoring</button>
-      <button class="btn secondary" id="heroTournament">Browse tournaments</button>
+      <button class="btn secondary" id="heroFindTournaments">Find Tournaments</button>
+      <button class="btn secondary" id="heroFindPlayers">Find Players</button>
+      <button class="btn" id="heroCreateTournament">Create Tournament</button>
     </div>
     <div class="hero-stats" id="heroStats"></div>
   </section>
 
   <div class="qa-rail" id="qaRail"></div>
+
+  <!-- ============ Featured tournaments (real: your own, honest about the rest) ============ -->
+  <div class="card" id="homeTournamentsCard">
+    <div class="sec-head"><h2>Your Tournaments</h2>
+      <button class="icon-btn" id="homeTournamentsSeeAll">See all</button>
+    </div>
+    <div id="homeTournamentsRail"></div>
+    <div class="stat-dim" style="margin-top:10px;">
+      Public tournament discovery — browsing tournaments you haven't joined — is on the roadmap.
+      For now, tournaments you create or join show up here.
+    </div>
+  </div>
+
+  <!-- ============ Find players ============ -->
+  <button class="action-row-btn" id="homeFindPlayersBtn" style="margin-bottom:14px;">
+    <span class="arb-ico"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg></span>
+    <span class="arb-txt">
+      <span class="arb-t">Find players</span>
+      <span class="arb-s">Search by name or @handle and send a connection request</span>
+    </span>
+    <span class="arb-go">&rsaquo;</span>
+  </button>
+
+  <!-- ============ How CricketConnect Works ============ -->
+  <div class="card">
+    <div class="sec-head"><h2>How CricketConnect Works</h2></div>
+    <div class="howit-grid">
+      <div class="howit-step">
+        <div class="howit-n">1</div>
+        <b>Create your profile</b>
+        <span>Set your role and area so nearby teams can find you.</span>
+      </div>
+      <div class="howit-step">
+        <div class="howit-n">2</div>
+        <b>Build or join a team</b>
+        <span>Search players by name, send a request, put together your squad.</span>
+      </div>
+      <div class="howit-step">
+        <div class="howit-n">3</div>
+        <b>Score live, ball by ball</b>
+        <span>Run tournaments with real fixtures and share a live link.</span>
+      </div>
+      <div class="howit-step">
+        <div class="howit-n">4</div>
+        <b>Climb the ranks</b>
+        <span>Every match builds your career stats and streak.</span>
+      </div>
+    </div>
+  </div>
 
   <div class="profile-chip" id="homeProfile">
     <div class="pc-av" id="homeAvatar"></div>
@@ -190,6 +240,14 @@
     <div id="eventsWidget"></div>
   </div>
 
+  <!-- ============ Your teams (team discovery equivalent) ============ -->
+  <div class="card" id="homeTeamsCard">
+    <div class="sec-head"><h2>Your Teams</h2>
+      <button class="icon-btn" id="homeTeamsSeeAll">See all</button>
+    </div>
+    <div id="homeTeamsRail"></div>
+  </div>
+
   <div class="quick-grid" style="margin-bottom:14px;">
     <button class="quick-btn primary" id="qaNewMatch">
       <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 8v8M8 12h8"/></svg>
@@ -214,6 +272,21 @@
       <button class="icon-btn" id="viewAllHistoryBtn">View all</button>
     </div>
     <div id="recentResults"></div>
+  </div>
+
+  <!-- ============ Guest CTA (hidden once signed in) ============ -->
+  <div class="card hidden home-cta" id="homeGuestCta">
+    <h2 style="margin-bottom:6px;">Your gully game belongs in the gallery.</h2>
+    <div class="stat-dim" style="margin-bottom:14px;">
+      Create an account to keep your matches, teams and streak synced across devices.
+    </div>
+    <button class="btn" id="homeCtaSignIn">Create account</button>
+  </div>
+
+  <div class="home-footer">
+    <div class="bf-name">Cricket Connect</div>
+    <div class="bf-tag">Gully to Gallery.</div>
+    <a href="./privacy.html" class="home-footer-link">Privacy policy</a>
   </div>
 </div>
 
