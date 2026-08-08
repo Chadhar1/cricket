@@ -27,11 +27,15 @@ npm run dev      # http://localhost:3100/welcome
    cd legacy-app/marketing
    npm run build
    ```
-2. Copy the exported output into legacy-app's own served root:
+2. Copy the exported output into legacy-app's own served root. Next's static export writes
+   nested routes as a flat `<route>.html` file (here, `out\welcome.html`) — that's the actual
+   page. The `out\welcome\` folder next to it only holds client-navigation data, not the page
+   itself, so it does NOT get copied.
    ```powershell
    # from legacy-app/marketing
    Remove-Item -Recurse -Force ..\welcome, ..\_next -ErrorAction SilentlyContinue
-   Copy-Item -Recurse out\welcome ..\welcome
+   New-Item -ItemType Directory -Force ..\welcome | Out-Null
+   Copy-Item out\welcome.html ..\welcome\index.html
    Copy-Item -Recurse out\_next ..\_next
    ```
 3. Commit and push from `legacy-app`:
