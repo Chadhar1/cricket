@@ -281,10 +281,51 @@ export const saveTeam   = (t)=>saveRowIn('teams', t);
 export const fetchTeams = ()=>fetchAllIn('teams');
 export const deleteTeam = (id)=>deleteRowIn('teams', id);
 
-/* tournaments */
-export const saveTournament    = (t)=>saveRowIn('tournaments', t, { is_public: !!t.isPublic });
+/* tournaments — the queryable columns (name/location/dates/status/...) are
+   promoted copies of fields also present in `data`, kept in sync on every
+   save so listing/filtering/RLS never has to parse JSONB. `data` stays the
+   source of truth tournament.js reads back on load. */
+function tournamentColumns(t){
+  return {
+    is_public: !!t.isPublic,
+    name: t.name || '',
+    location: t.location || '',
+    ground: t.ground || '',
+    start_date: t.startDate || null,
+    end_date: t.endDate || null,
+    description: t.description || '',
+    banner_url: t.bannerUrl || null,
+    entry_rules: t.entryRules || '',
+    rules: t.rules || '',
+    status: t.status || 'upcoming'
+  };
+}
+export const saveTournament    = (t)=>saveRowIn('tournaments', t, tournamentColumns(t));
 export const fetchTournaments  = ()=>fetchAllIn('tournaments');
 export const deleteTournament  = (id)=>deleteRowIn('tournaments', id);
+
+/* Single tournament by id, for the public/shareable detail page — works
+   for the owner, an admin, or anyone when the tournament is public; RLS
+   alone decides (a private tournament you don't own simply comes back as
+   no row, not an error, so this never leaks whether a private id exists). */
+export async function fetchTournamentById(id){
+  if(!ready || !id) return null;
+  const { data, error } = await sb.from('tournaments')
+    .select('data, user_id, is_public, name, location, ground, start_date, end_date, description, banner_url, entry_rules, rules, status')
+    .eq('id', id).maybeSingle();
+  if(error){ console.error('fetchTournamentById failed:', error); return null; }
+  if(!data) return null;
+  const d = data.data || {};
+  return {
+    ...d,
+    ownerId: data.user_id, isPublic: !!data.is_public,
+    name: data.name || d.name || '', location: data.location || d.location || '',
+    ground: data.ground || d.ground || '', startDate: data.start_date || d.startDate || null,
+    endDate: data.end_date || d.endDate || null, description: data.description || d.description || '',
+    bannerUrl: data.banner_url || d.bannerUrl || null, entryRules: data.entry_rules || d.entryRules || '',
+    rules: data.rules || d.rules || '', status: data.status || d.status || 'upcoming'
+  };
+}
 
 /* Public tournament discovery — real, RLS-backed (see supabase.sql's
    "public tournaments are readable by anyone" policy). Only returns

@@ -8,6 +8,48 @@ import { makeId } from './engine.js';
 export const POINTS = { win:2, tie:1, noResult:1, loss:0 };
 
 /* ---------------------------------------------------------------------------
+   TASK 5 ARCHITECTURE NOTE — tournament storage.
+
+   A tournament is one row in Supabase: scalar fields the app needs to
+   query/list/RLS (name, location, ground, start_date, end_date, status,
+   is_public, ...) live as real columns; teams/fixtures/knockout stay
+   nested inside the row's `data` column exactly as this file already
+   models them below. Nothing in this file changed for Task 5 — the engine
+   was already correct and UI-agnostic.
+
+   Deliberately NOT introduced yet: separate `tournament_teams` and
+   `fixtures` tables. Those become worth the two-source-of-truth cost only
+   once something needs row-level access to a single team or fixture
+   independent of loading the whole tournament — concretely: self-service
+   team registration with captain/manager permissions (tournament_teams,
+   with a `status: pending|approved|rejected` column and RLS keyed off
+   captain_uid/manager_uid), or browsing fixtures across tournaments
+   (fixtures as its own table). Until one of those is actually being
+   built, that split would just be an unused, unsynced duplicate of what's
+   already in `data.fixtures`/`data.teams`.
+
+   Live scoring hook: `fixture.matchId` (already below) is where a real
+   scored match attaches to a fixture once live scoring exists — no schema
+   change needed for that either.
+   =========================================================================== */
+
+export const STATUSES = ['upcoming','live','completed','cancelled'];
+
+/* Default status when an organizer hasn't manually set one — derived from
+   real dates/completion, never guessed. Manual overrides (e.g. an
+   organizer marking a tournament "Cancelled") always win; this is only the
+   fallback. */
+export function deriveStatus(tournament, storedStatus){
+  if(storedStatus === 'cancelled') return 'cancelled';
+  if(tournamentChampion(tournament)) return 'completed';
+  const started = allFixtures(tournament).some(f=>f.status === 'completed');
+  if(started) return 'live';
+  const start = tournament.startDate ? new Date(tournament.startDate) : null;
+  if(start && start.getTime() <= Date.now()) return 'live';
+  return 'upcoming';
+}
+
+/* ---------------------------------------------------------------------------
    Data shapes
    ---------------------------------------------------------------------------
    tournament = {
@@ -34,7 +76,11 @@ export const POINTS = { win:2, tie:1, noResult:1, loss:0 };
    }
    --------------------------------------------------------------------------- */
 
-export function createTournament({ name, format = 'league-knockout', oversLimit = 20, allOutWickets = 10, teams = [] }){
+export function createTournament({
+  name, format = 'league-knockout', oversLimit = 20, allOutWickets = 10, teams = [],
+  location = '', ground = '', startDate = null, endDate = null, description = '',
+  bannerUrl = null, entryRules = '', rules = '', status = 'upcoming'
+}){
   return {
     id: makeId(),
     name: name || 'Tournament',
@@ -44,6 +90,7 @@ export function createTournament({ name, format = 'league-knockout', oversLimit 
     teams: teams.map(t=>({ id: t.id || makeId(), name: t.name })),
     fixtures: [],
     knockout: [],
+    location, ground, startDate, endDate, description, bannerUrl, entryRules, rules, status,
     createdAt: Date.now(),
     updatedAt: Date.now()
   };

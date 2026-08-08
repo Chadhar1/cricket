@@ -450,6 +450,16 @@ body.has-tabs #app{padding-bottom:78px;}
 .badge.live{background:rgba(255,77,77,0.18); color:#ff8f8f; border:1px solid rgba(255,77,77,0.4);}
 .badge.done{background:rgba(242,183,5,0.16); color:var(--gold-soft); border:1px solid var(--card-border);}
 .badge.open{background:rgba(2,137,90,0.2); color:#7be0b8; border:1px solid var(--green-2);}
+.badge.cancelled{background:rgba(255,255,255,0.08); color:var(--ink-dim); border:1px solid var(--line);}
+
+.kv-list{display:flex; flex-direction:column;}
+.kv-row{
+  display:flex; align-items:flex-start; justify-content:space-between; gap:14px;
+  padding:9px 0; border-bottom:1px solid rgba(255,255,255,0.07); font-size:13px;
+}
+.kv-row:last-child{border-bottom:none;}
+.kv-k{color:var(--ink-dim); flex:0 0 auto;}
+.kv-v{color:var(--ink); font-weight:600; text-align:right;}
 
 table.table-std{width:100%; border-collapse:collapse; font-size:12.5px;}
 table.table-std th{

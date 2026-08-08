@@ -566,25 +566,37 @@
   <div class="topbar" style="padding-top:0;">
     <div class="brand" style="min-width:0;">
       <div class="brand-title" style="white-space:normal;" id="tourName">Tournament</div>
+      <div style="margin-top:4px;" id="tourStatusBadge"></div>
     </div>
     <div class="topbar-actions">
-      <button class="icon-btn" id="tourMenuBtn">Manage</button>
+      <button class="icon-btn" id="tourShareBtn">Share</button>
+      <button class="icon-btn hidden" id="tourMenuBtn">Manage</button>
     </div>
   </div>
 
-  <div id="championBox"></div>
+  <div id="tourStatusBox" class="hidden"><div class="card"><div class="empty-note" id="tourStatusText"></div></div></div>
 
-  <div class="pill-row">
-    <button class="pill active" data-tab="table">Table</button>
-    <button class="pill" data-tab="fixtures">Fixtures</button>
-    <button class="pill" data-tab="knockout">Knockout</button>
-    <button class="pill" data-tab="teams">Teams</button>
+  <div id="tourContent">
+    <div id="championBox"></div>
+
+    <div class="pill-row">
+      <button class="pill active" data-tab="overview">Overview</button>
+      <button class="pill" data-tab="table">Table</button>
+      <button class="pill" data-tab="fixtures">Fixtures</button>
+      <button class="pill" data-tab="knockout">Knockout</button>
+      <button class="pill" data-tab="teams">Teams</button>
+      <button class="pill" data-tab="organizer">Organizer</button>
+      <button class="pill" data-tab="rules">Rules</button>
+    </div>
+
+    <div id="tourTabOverview"></div>
+    <div id="tourTabTable" class="hidden"></div>
+    <div id="tourTabFixtures" class="hidden"></div>
+    <div id="tourTabKnockout" class="hidden"></div>
+    <div id="tourTabTeams" class="hidden"></div>
+    <div id="tourTabOrganizer" class="hidden"></div>
+    <div id="tourTabRules" class="hidden"></div>
   </div>
-
-  <div id="tourTabTable"></div>
-  <div id="tourTabFixtures" class="hidden"></div>
-  <div id="tourTabKnockout" class="hidden"></div>
-  <div id="tourTabTeams" class="hidden"></div>
 </div>
 
 <!-- ============================== STATS ============================== -->

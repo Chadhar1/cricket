@@ -534,6 +534,40 @@ create policy "profiles with a public handle are readable by anyone"
   using (handle is not null);
 
 -- ---------------------------------------------------------------------------
+-- MIGRATION — tournament architecture foundation (Task 5).
+--
+-- Promotes the scalar fields a tournament listing/detail page and RLS
+-- actually need to query, filter or show independent of the JSONB blob, as
+-- real columns. `data` keeps holding the full nested object (teams,
+-- fixtures, knockout) exactly as tournament.js already reads/writes it —
+-- this migration does not touch that shape, so nothing existing breaks.
+--
+-- No new RLS policies are needed here: RLS is row-level, not column-level,
+-- so the existing "owner has full access" / "admin can read all rows" /
+-- "public tournaments are readable by anyone" policies on this table
+-- already cover these new columns automatically.
+--
+-- `tournament_teams` and `fixtures` as separate normalized tables are
+-- deliberately NOT part of this migration — see the Task 5 architecture
+-- note in tournament.js. They belong to a future migration once there's a
+-- real consumer for row-level team/fixture access (self-service team
+-- registration with captain/manager permissions, or cross-tournament
+-- fixture browsing) — building them unused now would just be a second,
+-- unsynced source of truth alongside the JSONB the app already reads.
+-- ---------------------------------------------------------------------------
+alter table public.tournaments add column if not exists name         text not null default '';
+alter table public.tournaments add column if not exists location     text not null default '';
+alter table public.tournaments add column if not exists ground       text not null default '';
+alter table public.tournaments add column if not exists start_date   date;
+alter table public.tournaments add column if not exists end_date     date;
+alter table public.tournaments add column if not exists description  text not null default '';
+alter table public.tournaments add column if not exists banner_url   text;
+alter table public.tournaments add column if not exists entry_rules  text not null default '';
+alter table public.tournaments add column if not exists rules        text not null default '';
+alter table public.tournaments add column if not exists status       text not null default 'upcoming'
+  check (status in ('upcoming','live','completed','cancelled'));
+
+-- ---------------------------------------------------------------------------
 -- Bootstrap: run this yourself once, after you've signed up in the app, to
 -- become the first admin. Replace with your actual auth user id.
 -- ---------------------------------------------------------------------------

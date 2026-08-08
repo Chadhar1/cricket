@@ -17,7 +17,8 @@ import {
 import {
   createTournament, generateRoundRobin, resultFromMatch, applyResult,
   computeStandings, leagueComplete, generateKnockout, advanceKnockout,
-  tournamentChampion, teamNameById, allFixtures, formatNRR, newFixture
+  tournamentChampion, teamNameById, allFixtures, formatNRR, newFixture,
+  STATUSES, deriveStatus, POINTS
 } from './tournament.js';
 
 import { AVATARS, DEFAULT_AVATAR, avatarSVG, initialsBadge, brandMark, brandLockup } from './avatars.js';
@@ -44,7 +45,8 @@ import {
   submitOrganiserApplication, fetchMyOrganiserApplications,
   isCurrentUserAdmin, fetchPendingOrganiserApplications, countOrganisers,
   approveOrganiserApplication, rejectOrganiserApplication,
-  fetchPlatformStats, fetchPlatformTournaments, dailyCheckIn, fetchPublicTournaments
+  fetchPlatformStats, fetchPlatformTournaments, dailyCheckIn, fetchPublicTournaments,
+  fetchTournamentById
 } from './cloud.js';
 
 import {
@@ -71,7 +73,10 @@ let editingTeamId = null, teamFormRoster = [];
 let pendingExtra = null;
 let authMode = 'signin';
 let authAvatar = DEFAULT_AVATAR;
-let openTourId = null, tourTab = 'table';
+let openTourId = null, tourTab = 'overview';
+let viewedTournamentPublic = null;   // non-owned tournament fetched for read-only viewing
+let tourLoading = false;
+let tourLoadError = '';
 let setupPrefill = null;
 let mcTab = 'scorecard';
 let statsTab = 'batting';
@@ -865,6 +870,14 @@ function playerShareUrl(handle){
   return location.origin + location.pathname.replace(/index\.html$/, '') + 'player.html?u=' + encodeURIComponent(handle);
 }
 
+/* Tournament links reuse the main app (not a standalone page like
+   live.html/player.html) because viewing one is a full in-app screen with
+   its own tabs, not a single-purpose scoreboard — index.html?tour=<id>
+   opens straight into it, guest or not (see boot()). */
+function tourShareUrl(id){
+  return location.origin + location.pathname.replace(/index\.html$/, '') + 'index.html?tour=' + encodeURIComponent(id);
+}
+
 function playerIdentity(){
   const vp = viewedPlayer;
   if(!vp) return null;
@@ -1159,10 +1172,10 @@ async function renderRecommendedTournaments(){
   }
   box.innerHTML = `<div class="mini-rail">` +
     list.map(t=>`
-      <div class="mini-card" style="cursor:default;">
+      <button class="mini-card" data-action="open-tour" data-id="${esc(t.id)}">
         <div class="mc-t">${esc(t.name)}</div>
         <div class="mc-s">${(t.teams || []).length} team${(t.teams || []).length === 1 ? '' : 's'}${t.format ? ' · ' + esc(t.format) : ''}</div>
-      </div>`).join('') +
+      </button>`).join('') +
     `</div>`;
 }
 
@@ -2139,6 +2152,21 @@ async function removeTeam(id){
 }
 
 /* ---------------- TOURNAMENTS ---------------- */
+
+const STATUS_BADGE = {
+  upcoming: ['open','Upcoming'], live: ['live','Live'],
+  completed: ['done','Completed'], cancelled: ['cancelled','Cancelled']
+};
+function statusBadgeHTML(status){
+  const [cls, label] = STATUS_BADGE[status] || STATUS_BADGE.upcoming;
+  return `<span class="badge ${cls}">${label}</span>`;
+}
+function fmtDateRange(startDate, endDate){
+  if(startDate && endDate && startDate !== endDate) return fmtWhen(startDate) + ' – ' + fmtWhen(endDate);
+  if(startDate) return fmtWhen(startDate);
+  return '';
+}
+
 function renderTournaments(){
   const box = $('tournamentsList');
   if(!tournaments.length){
@@ -2150,15 +2178,15 @@ function renderTournaments(){
     const fx = allFixtures(t);
     const done = fx.filter(f=>f.status === 'completed').length;
     const champ = tournamentChampion(t);
-    const badge = champ ? `<span class="badge done">Complete</span>`
-      : done > 0 ? `<span class="badge live">In progress</span>`
-      : `<span class="badge open">Not started</span>`;
+    const status = deriveStatus(t, t.status);
+    const metaLine = [t.location, fmtDateRange(t.startDate, t.endDate)].filter(Boolean).join(' · ');
     return `<div class="tour-card" data-action="open-tour" data-id="${esc(t.id)}">
       ${initialsBadge(t.name, 40)}
       <div class="tc-b">
         <div class="tc-n">${esc(t.name)}</div>
         <div class="tc-m">${t.teams.length} teams · ${done}/${fx.length} played · ${t.oversLimit} ov</div>
-        <div style="margin-top:6px;">${badge}${champ ? ` <span class="badge done">🏆 ${esc(champ.name)}</span>` : ''}</div>
+        ${metaLine ? `<div class="tc-m">${esc(metaLine)}</div>` : ''}
+        <div style="margin-top:6px;">${statusBadgeHTML(status)}${champ ? ` <span class="badge done">🏆 ${esc(champ.name)}</span>` : ''}</div>
       </div>
       <div class="pc-go">›</div>
     </div>`;
@@ -2169,6 +2197,9 @@ function openNewTournamentModal(){
   openModal(`<h3>New Tournament</h3>
     <label>Name</label>
     <input type="text" id="tName" placeholder="e.g. Ramzan Cup 2026" maxlength="34">
+    <div class="auth-error hidden" id="tNameError">Enter a tournament name</div>
+    <label>Description</label>
+    <textarea id="tDesc" rows="2" placeholder="What's this tournament about?" maxlength="300"></textarea>
     <label>Format</label>
     <select id="tFormat">
       <option value="league-knockout">League + knockouts</option>
@@ -2178,6 +2209,18 @@ function openNewTournamentModal(){
       <div><label>Overs</label><input type="number" id="tOvers" min="1" max="90" value="20"></div>
       <div><label>All out at</label><input type="number" id="tWickets" min="1" max="11" value="10"></div>
     </div>
+    <label>Location</label>
+    <input type="text" id="tLocation" placeholder="City / area" maxlength="60">
+    <label>Ground</label>
+    <input type="text" id="tGround" placeholder="Ground name" maxlength="60">
+    <div class="row">
+      <div><label>Start date</label><input type="date" id="tStartDate"></div>
+      <div><label>End date</label><input type="date" id="tEndDate"></div>
+    </div>
+    <label>Entry rules</label>
+    <textarea id="tEntryRules" rows="2" placeholder="Who can join, fees, registration deadline&hellip;" maxlength="500"></textarea>
+    <label>Tournament rules</label>
+    <textarea id="tRules" rows="2" placeholder="Playing conditions, tie-breakers&hellip;" maxlength="1000"></textarea>
     <label>Teams (tap to include)</label>
     <div id="tTeamPick">${teams.length ? teams.map(t=>
       `<div class="list-pick" data-action="toggle-tteam" data-id="${esc(t.id)}">
@@ -2221,17 +2264,27 @@ function addAdHocTeam(){
 
 async function createTournamentFromForm(){
   const name = $('tName').value.trim();
-  if(!name){ toast('Enter a tournament name'); return; }
+  const nameErr = $('tNameError');
+  if(!name){ nameErr.classList.remove('hidden'); toast('Enter a tournament name'); return; }
+  nameErr.classList.add('hidden');
   const picked = teams.filter(t=>window.__tSelected.has(t.id)).map(t=>({ id:t.id, name:t.name }));
   const adhoc = (window.__tAdHoc || []).map(n=>({ id:makeId(), name:n }));
   const list = [...picked, ...adhoc];
   if(list.length < 2){ toast('Pick at least 2 teams'); return; }
 
+  const startDate = $('tStartDate').value || null;
+  const endDate = $('tEndDate').value || null;
+  if(startDate && endDate && endDate < startDate){ toast('End date is before the start date'); return; }
+
   const t = createTournament({
     name, format: $('tFormat').value,
     oversLimit: Math.max(1, parseInt($('tOvers').value || '20', 10)),
     allOutWickets: Math.max(1, Math.min(11, parseInt($('tWickets').value || '10', 10))),
-    teams: list
+    teams: list,
+    location: $('tLocation').value.trim(), ground: $('tGround').value.trim(),
+    startDate, endDate, description: $('tDesc').value.trim(),
+    entryRules: $('tEntryRules').value.trim(), rules: $('tRules').value.trim(),
+    status: 'upcoming'
   });
   t.fixtures = generateRoundRobin(t, { legs: parseInt($('tLegs').value || '1', 10) });
   const publicToggle = $('tPublicToggle');
@@ -2239,16 +2292,69 @@ async function createTournamentFromForm(){
   tournaments.unshift(t); saveTours();
   if(cloudReady() && getUser()) await saveTournament(t);
   closeModal();
-  openTourId = t.id; tourTab = 'fixtures'; go('tournament');
+  openTourId = t.id; tourTab = 'overview'; viewedTournamentPublic = null; go('tournament');
   toast(t.fixtures.length + ' fixtures generated');
 }
 
-function currentTour(){ return tournaments.find(t=>t.id === openTourId) || null; }
+/* ---------------- tournament viewing: owner (My Tournaments) or public ---------------- */
+
+function currentTour(){
+  return tournaments.find(t=>t.id === openTourId) ||
+    (viewedTournamentPublic && viewedTournamentPublic.id === openTourId ? viewedTournamentPublic : null);
+}
+
+/* True when this device/account can manage the tournament: either it's in
+   this device's own list (local or synced — created by this account), or
+   (defensive, e.g. a fresh device before sync finishes) the fetched row's
+   owner matches the signed-in user. Every mutating action gated on this is
+   also independently enforced server-side by the "owner has full access"
+   RLS policy, so this flag is a UI convenience, not the real boundary. */
+function isTourOwner(t){
+  if(!t) return false;
+  if(tournaments.some(x=>x.id === t.id)) return true;
+  const u = getUser();
+  return !!(u && t.ownerId && t.ownerId === u.id);
+}
+
+/* Opens a tournament for viewing. Synchronous for your own (already
+   local); for anything else, fetches it read-only — RLS decides whether
+   that succeeds (public tournaments only, or your own from another
+   device). */
+async function openTournamentView(id){
+  openTourId = id; tourTab = 'overview';
+  const mine = tournaments.find(x=>x.id === id);
+  if(mine){ viewedTournamentPublic = null; tourLoading = false; tourLoadError = ''; go('tournament'); return; }
+  viewedTournamentPublic = null; tourLoadError = '';
+  tourLoading = true; go('tournament');
+  const t = cloudReady() ? await fetchTournamentById(id) : null;
+  tourLoading = false;
+  if(openTourId !== id) return; // navigated elsewhere while this was loading
+  if(!t){ tourLoadError = "This tournament is private, was deleted, or the link isn't valid."; render(); return; }
+  viewedTournamentPublic = t;
+  render();
+}
 
 function renderTournament(){
   const t = currentTour();
-  if(!t){ go('tournaments'); return; }
+  const statusBox = $('tourStatusBox');
+  const content = $('tourContent');
+
+  if(!t){
+    if(tourLoading || tourLoadError){
+      statusBox.classList.remove('hidden'); content.classList.add('hidden');
+      $('tourStatusText').textContent = tourLoading ? 'Loading tournament…' : tourLoadError;
+      return;
+    }
+    go('tournaments'); return;
+  }
+  statusBox.classList.add('hidden'); content.classList.remove('hidden');
+
+  const owner = isTourOwner(t);
+  const status = deriveStatus(t, t.status);
+
   $('tourName').textContent = t.name;
+  $('tourMenuBtn').classList.toggle('hidden', !owner);
+  $('tourStatusBadge').innerHTML = statusBadgeHTML(status);
 
   const champ = tournamentChampion(t);
   $('championBox').innerHTML = champ
@@ -2256,13 +2362,83 @@ function renderTournament(){
 
   document.querySelectorAll('#screen-tournament .pill').forEach(p=>
     p.classList.toggle('active', p.dataset.tab === tourTab));
-  ['table','fixtures','knockout','teams'].forEach(x=>
+  ['overview','table','fixtures','knockout','teams','organizer','rules'].forEach(x=>
     $('tourTab' + x[0].toUpperCase() + x.slice(1)).classList.toggle('hidden', x !== tourTab));
 
-  if(tourTab === 'table') renderTourTable(t);
-  else if(tourTab === 'fixtures') renderTourFixtures(t);
-  else if(tourTab === 'knockout') renderTourKnockout(t);
-  else renderTourTeams(t);
+  if(tourTab === 'overview') renderTourOverview(t, owner, status);
+  else if(tourTab === 'table') renderTourTable(t);
+  else if(tourTab === 'fixtures') renderTourFixtures(t, owner);
+  else if(tourTab === 'knockout') renderTourKnockout(t, owner);
+  else if(tourTab === 'teams') renderTourTeams(t, owner);
+  else if(tourTab === 'organizer') renderTourOrganizer(t);
+  else if(tourTab === 'rules') renderTourRules(t, owner);
+}
+
+function renderTourOverview(t, owner, status){
+  const fx = allFixtures(t);
+  const done = fx.filter(f=>f.status === 'completed').length;
+  const metaRows = [
+    ['Status', statusBadgeHTML(status)],
+    ['Format', esc(t.format === 'league' ? 'League table only' : 'League + knockouts')],
+    ['Overs', esc(t.oversLimit) + ' overs · all out at ' + esc(t.allOutWickets)],
+    t.location ? ['Location', esc(t.location)] : null,
+    t.ground ? ['Ground', esc(t.ground)] : null,
+    (t.startDate || t.endDate) ? ['Dates', esc(fmtDateRange(t.startDate, t.endDate) || '—')] : null,
+    ['Teams', esc(t.teams.length)],
+    ['Fixtures', `${done}/${fx.length} played`],
+    ['Visibility', t.isPublic ? 'Public — anyone can find and view this'
+      : owner ? 'Private — only visible to you' : 'Private — visible to the organizer and admins']
+  ].filter(Boolean);
+
+  $('tourTabOverview').innerHTML = `
+    ${t.description ? `<div class="card"><div class="stat-dim">${esc(t.description)}</div></div>` : ''}
+    <div class="card">
+      <div class="sec-head"><h2>Tournament information</h2></div>
+      <div class="kv-list">
+        ${metaRows.map(([k,v])=>`<div class="kv-row"><div class="kv-k">${esc(k)}</div><div class="kv-v">${v}</div></div>`).join('')}
+      </div>
+    </div>
+  `;
+}
+
+function renderTourOrganizer(t){
+  const box = $('tourTabOrganizer');
+  box.innerHTML = '<div class="card"><div class="empty-note">Loading organizer info…</div></div>';
+  (async ()=>{
+    let name = 'Organizer', handle = '', avatar = initialsBadge('Organizer', 40);
+    if(t.ownerId){
+      if(!profileCache[t.ownerId]) await resolveProfiles([t.ownerId]);
+      const p = profileCache[t.ownerId];
+      if(p){ name = p.displayName || name; handle = p.handle || ''; avatar = avatarHTMLFor(p, 40); }
+    } else if(isTourOwner(t)){
+      name = displayName(); handle = (myPublicProfile && myPublicProfile.handle) || ''; avatar = avatarHTML(40);
+    }
+    if($('tourTabOrganizer').classList.contains('hidden')) return; // navigated away
+    box.innerHTML = `<div class="card">
+      <div class="list-pick" style="cursor:default;">
+        ${avatar}
+        <div class="lp-n">${esc(name)}${handle ? ` <span class="stat-dim">@${esc(handle)}</span>` : ''}</div>
+      </div>
+      ${handle ? `<button class="btn secondary small" data-action="view-player" data-uid="${esc(t.ownerId || (getUser() && getUser().id) || '')}" data-name="${esc(name)}">View profile</button>` : '<div class="stat-dim">This organizer hasn\'t set up a public profile yet.</div>'}
+    </div>`;
+  })();
+}
+
+function renderTourRules(t, owner){
+  $('tourTabRules').innerHTML = `
+    <div class="card">
+      <div class="sec-head"><h2>Entry rules</h2></div>
+      ${t.entryRules ? `<div class="stat-dim">${esc(t.entryRules)}</div>` : '<div class="empty-note">No entry rules added yet.</div>'}
+    </div>
+    <div class="card">
+      <div class="sec-head"><h2>Tournament rules</h2></div>
+      ${t.rules ? `<div class="stat-dim">${esc(t.rules)}</div>` : '<div class="empty-note">No rules added yet.</div>'}
+    </div>
+    <div class="card">
+      <div class="sec-head"><h2>Points &amp; NRR</h2></div>
+      <div class="stat-dim">Win ${POINTS.win} pts · Tie ${POINTS.tie} pt · Loss ${POINTS.loss} pts.
+        NRR follows the ICC rule: a side bowled out is charged the full quota of overs.</div>
+    </div>`;
 }
 
 function renderTourTable(t){
@@ -2289,19 +2465,19 @@ function renderTourTable(t){
   </div>`;
 }
 
-function renderTourFixtures(t){
-  const rows = t.fixtures.map(f=>fixtureRowHTML(t, f)).join('');
+function renderTourFixtures(t, owner){
+  const rows = t.fixtures.map(f=>fixtureRowHTML(t, f, owner)).join('');
   $('tourTabFixtures').innerHTML = `<div class="card">
     <div class="sec-head"><h2>League Fixtures</h2>
-      <button class="icon-btn" data-action="regen-fixtures">Regenerate</button></div>
+      ${owner ? `<button class="icon-btn" data-action="regen-fixtures">Regenerate</button>` : ''}</div>
     ${rows || '<div class="empty-note">No fixtures yet.</div>'}
   </div>`;
 }
 
-function fixtureRowHTML(t, f){
+function fixtureRowHTML(t, f, owner){
   const done = f.status === 'completed' && f.result;
   const a = teamNameById(t, f.teamAId), b = teamNameById(t, f.teamBId);
-  const canPlay = f.teamAId && f.teamBId && !done;
+  const canPlay = owner && f.teamAId && f.teamBId && !done;
   let score = '';
   if(done){
     const r = f.result;
@@ -2317,14 +2493,14 @@ function fixtureRowHTML(t, f){
       ${score}
     </div>
     <div style="display:flex;gap:6px;flex-shrink:0;">
-      ${!done ? `<button class="icon-btn" data-action="set-fixture-date" data-id="${esc(f.id)}">Date</button>` : ''}
+      ${owner && !done ? `<button class="icon-btn" data-action="set-fixture-date" data-id="${esc(f.id)}">Date</button>` : ''}
       ${canPlay ? `<button class="icon-btn" data-action="play-fixture" data-id="${esc(f.id)}">Play</button>` : ''}
       ${done ? `<button class="icon-btn" data-action="view-fixture" data-id="${esc(f.id)}">Card</button>` : ''}
     </div>
   </div>`;
 }
 
-function renderTourKnockout(t){
+function renderTourKnockout(t, owner){
   const box = $('tourTabKnockout');
   if(t.format === 'league'){
     box.innerHTML = `<div class="card"><div class="empty-note">This is a league-only tournament.<br>The team top of the table wins it.</div></div>`;
@@ -2334,9 +2510,11 @@ function renderTourKnockout(t){
     const ready = leagueComplete(t);
     box.innerHTML = `<div class="card">
       <div class="empty-note">${ready
-        ? 'League complete. Generate the knockout bracket from the final table.'
-        : 'The bracket unlocks when every league fixture has been played.<br>You can also generate it early if you want.'}</div>
-      <button class="btn" data-action="gen-knockout">Generate Knockout Bracket</button>
+        ? 'League complete.' + (owner ? ' Generate the knockout bracket from the final table.' : ' The knockout bracket hasn\'t been generated yet.')
+        : owner
+          ? 'The bracket unlocks when every league fixture has been played.<br>You can also generate it early if you want.'
+          : 'The knockout bracket hasn\'t started yet.'}</div>
+      ${owner ? `<button class="btn" data-action="gen-knockout">Generate Knockout Bracket</button>` : ''}
     </div>`;
     return;
   }
@@ -2354,13 +2532,13 @@ function renderTourKnockout(t){
     <div class="stat-dim" style="font-size:10.5px;letter-spacing:1px;text-transform:uppercase;margin-bottom:4px;">${label}</div>
     ${side(t, f, 'a')}${side(t, f, 'b')}
     <div style="display:flex;gap:6px;margin-top:8px;">
-      ${f.teamAId && f.teamBId && f.status !== 'completed'
+      ${owner && f.teamAId && f.teamBId && f.status !== 'completed'
         ? `<button class="icon-btn" data-action="play-fixture" data-id="${esc(f.id)}">Play</button>` : ''}
       ${f.status === 'completed' ? `<button class="icon-btn" data-action="view-fixture" data-id="${esc(f.id)}">Card</button>` : ''}
     </div></div>`;
 
   box.innerHTML = `<div class="card"><div class="sec-head"><h2>Knockout</h2>
-      <button class="icon-btn" data-action="gen-knockout">Reset bracket</button></div>
+      ${owner ? `<button class="icon-btn" data-action="gen-knockout">Reset bracket</button>` : ''}</div>
     <div class="bracket">
       ${semis.length ? `<div class="bracket-round"><h5>Semi-finals</h5>
         ${semis.map((f,i)=>mk(f, 'Semi-final ' + (i+1))).join('')}</div>` : ''}
@@ -2368,21 +2546,21 @@ function renderTourKnockout(t){
     </div></div>`;
 }
 
-function renderTourTeams(t){
+function renderTourTeams(t, owner){
   $('tourTabTeams').innerHTML = `<div class="card">
     <div class="sec-head"><h2>Teams</h2></div>
     ${t.teams.map(tm=>`<div class="hist-item">
       <div style="display:flex;align-items:center;gap:10px;">
         ${initialsBadge(tm.name, 32)}<div class="batter-name">${esc(tm.name)}</div>
       </div>
-      <div class="d">${(rosterFor(tm.name) || []).length} players</div>
+      ${owner ? `<div class="d">${(rosterFor(tm.name) || []).length} players</div>` : ''}
     </div>`).join('')}
-    <button class="btn secondary small" data-action="delete-tour">Delete this tournament</button>
+    ${owner ? `<button class="btn secondary small" data-action="delete-tour">Delete this tournament</button>` : ''}
   </div>`;
 }
 
 function playFixture(fixtureId){
-  const t = currentTour(); if(!t) return;
+  const t = currentTour(); if(!t || !isTourOwner(t)) return;
   const f = allFixtures(t).find(x=>x.id === fixtureId); if(!f) return;
   setupPrefill = {
     teamA: teamNameById(t, f.teamAId), teamB: teamNameById(t, f.teamBId),
@@ -2410,7 +2588,7 @@ function openFixtureDateModal(fixtureId){
 }
 
 async function saveFixtureDate(fixtureId){
-  const t = currentTour(); if(!t) return;
+  const t = currentTour(); if(!t || !isTourOwner(t)) return;
   const f = allFixtures(t).find(x=>x.id === fixtureId); if(!f) return;
   const date = $('fxDate').value, time = $('fxTime').value || '00:00';
   f.date = date ? new Date(date + 'T' + time).toISOString() : null;
@@ -2422,7 +2600,7 @@ async function saveFixtureDate(fixtureId){
 }
 
 async function genKnockout(){
-  const t = currentTour(); if(!t) return;
+  const t = currentTour(); if(!t || !isTourOwner(t)) return;
   t.knockout = generateKnockout(t);
   advanceKnockout(t);
   saveTours();
@@ -2431,7 +2609,7 @@ async function genKnockout(){
 }
 
 async function regenFixtures(){
-  const t = currentTour(); if(!t) return;
+  const t = currentTour(); if(!t || !isTourOwner(t)) return;
   const played = t.fixtures.filter(f=>f.status === 'completed').length;
   if(played > 0){ toast('Cannot regenerate — matches already played'); return; }
   t.fixtures = generateRoundRobin(t, { legs:1 });
@@ -2441,7 +2619,7 @@ async function regenFixtures(){
 }
 
 async function removeTournament(){
-  const t = currentTour(); if(!t) return;
+  const t = currentTour(); if(!t || !isTourOwner(t)) return;
   tournaments = tournaments.filter(x=>x.id !== t.id);
   saveTours();
   if(cloudReady() && getUser()) await deleteTournament(t.id);
@@ -2550,9 +2728,16 @@ function setupConnectivity(){
 }
 
 /* ---------------- MASTER RENDER ---------------- */
+/* `tournament` (the detail page, singular) is deliberately NOT in this list
+   — viewing a tournament is meant to work for guests too, same as a public
+   player profile or a live match link. Only `tournaments` (creating/
+   managing your own) stays gated. Every mutating action reachable from the
+   detail page is separately guarded by isTourOwner() and, underneath that,
+   by Supabase RLS — so this isn't the real security boundary, just where
+   guests stop being asked to sign in for something they're allowed to see. */
 const GATED = {
   setup:'start scoring', live:'score a match', teams:'build teams',
-  tournaments:'run tournaments', tournament:'run tournaments',
+  tournaments:'run tournaments',
   stats:'see your records', history:'see your match history',
   friends:'find and add friends', admin:'manage the platform'
 };
@@ -2711,6 +2896,18 @@ function bind(){
   $('newTournamentBtn').addEventListener('click', openNewTournamentModal);
   $('tourBack').addEventListener('click', ()=>go('tournaments'));
   $('tourMenuBtn').addEventListener('click', ()=>{ tourTab = 'teams'; render(); });
+  $('tourShareBtn').addEventListener('click', async ()=>{
+    const t = currentTour(); if(!t) return;
+    if(!t.isPublic && isTourOwner(t)){
+      toast('Turn on "Make this tournament public" first so the link works for others');
+      return;
+    }
+    try{
+      const url = tourShareUrl(t.id);
+      if(navigator.share) await navigator.share({ title: t.name + ' — Cricket Connect', url });
+      else { await navigator.clipboard.writeText(url); toast('Link copied'); }
+    }catch(e){ toast('Could not copy'); }
+  });
   document.querySelectorAll('#screen-tournament .pill').forEach(p=>
     p.addEventListener('click', ()=>{ tourTab = p.dataset.tab; render(); }));
 
@@ -2790,7 +2987,7 @@ function bind(){
     else if(a === 'save-event') saveEventForm();
     else if(a === 'del-event') removeEvent(el.dataset.id);
     else if(a === 'start-event') startFromItem(el.dataset.kind, el.dataset.id);
-    else if(a === 'open-tour'){ openTourId = el.dataset.id; tourTab = 'table'; go('tournament'); }
+    else if(a === 'open-tour') openTournamentView(el.dataset.id);
     else if(a === 'toggle-tteam') toggleTourTeam(el.dataset.id);
     else if(a === 'add-adhoc-team') addAdHocTeam();
     else if(a === 'rm-adhoc'){
@@ -2883,8 +3080,19 @@ async function boot(){
   }
 
   // Manifest shortcuts and deep links: ?go=setup | tournaments | stats | teams
-  const deep = new URLSearchParams(location.search).get('go');
+  // ?tour=<id> — a shareable tournament link. Works for guests: it bypasses
+  // the "sign in first" redirect below the same way a live-match link does,
+  // since viewing a tournament doesn't require an account.
+  const params = new URLSearchParams(location.search);
+  const deep = params.get('go');
+  const tourDeep = params.get('tour');
   const allowed = ['setup','tournaments','stats','teams','history','profile'];
+
+  if(tourDeep){
+    history.replaceState({}, '', location.pathname);
+    openTournamentView(tourDeep); // sets its own loading state and calls render()
+    return;
+  }
 
   if(configured && !getUser()) screen = 'auth';
   else if(deep && allowed.includes(deep)) screen = deep;
