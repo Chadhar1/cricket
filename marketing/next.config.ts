@@ -2,8 +2,14 @@ import type { NextConfig } from "next";
 import path from "path";
 
 const nextConfig: NextConfig = {
+  // Ship this site as plain static HTML/CSS/JS so it can be folded straight
+  // into legacy-app's own zero-build static deploy — one repo, one Vercel
+  // project, one domain. `npm run build` writes the output to out/; only
+  // out/welcome and out/_next get copied into legacy-app's served root
+  // (see marketing/README.md for the exact steps).
+  output: "export",
   images: {
-    remotePatterns: [{ protocol: "https", hostname: "**" }],
+    unoptimized: true,
   },
   // This folder is a standalone project inside legacy-app's repo now (not
   // part of the old cricket_connect monorepo workspace) — pin the root so
