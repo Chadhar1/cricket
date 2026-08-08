@@ -222,6 +222,29 @@ export async function searchProfiles(query, max = 15){
   return data.map(toAppProfile).filter(pr=>pr.uid !== (currentUser && currentUser.id));
 }
 
+/* Public player-profile card for the standalone, no-login-required
+   player.html page — reachable by anyone, signed in or not. Deliberately a
+   narrow column list (not `select('*')`) rather than reusing toAppProfile:
+   this is the one read path that can be hit by a fully anonymous visitor,
+   so it must never even request is_admin/points/streak/last_checkin,
+   regardless of what RLS would otherwise allow through. */
+export async function fetchPublicPlayerCard(handle){
+  if(!isConfigured()) return null;
+  if(!ready){ const ok = await initCloud(); if(!ok) return null; }
+  const h = String(handle || '').trim().toLowerCase().replace(/^@/, '');
+  if(!h) return null;
+  const { data, error } = await sb.from('profiles')
+    .select('id, handle, display_name, avatar_id, photo, bio, country, region, district, area, is_organiser')
+    .eq('handle', h).maybeSingle();
+  if(error){ console.error('fetchPublicPlayerCard failed:', error); return null; }
+  if(!data) return null;
+  return {
+    uid: data.id, handle: data.handle, displayName: data.display_name, avatarId: data.avatar_id,
+    photo: data.photo || undefined, bio: data.bio, isOrganiser: data.is_organiser,
+    country: data.country || '', region: data.region || '', district: data.district || '', area: data.area || ''
+  };
+}
+
 /* ---------------- generic collection sync ---------------- */
 
 async function saveRowIn(table, obj, extra = {}){

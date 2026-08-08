@@ -707,6 +707,12 @@
 
   <div class="card">
     <h2>Social</h2>
+    <button class="action-row-btn" id="viewMyProfileBtn">
+      <span class="arb-ico"><svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21v-1a6 6 0 016-6h4a6 6 0 016 6v1"/></svg></span>
+      <span class="arb-txt"><span class="arb-t">My public player profile</span>
+        <span class="arb-s">Stats, teams and tournaments — shareable once you set a username</span></span>
+      <span class="arb-go">&rsaquo;</span>
+    </button>
     <button class="action-row-btn" data-action="go-friends">
       <span class="arb-ico"><svg viewBox="0 0 24 24"><circle cx="9" cy="8" r="3.5"/><path d="M2 20v-1a5 5 0 015-5h4a5 5 0 015 5v1"/></svg></span>
       <span class="arb-txt"><span class="arb-t">Friends</span>
@@ -788,6 +794,62 @@
       <h2>Your friends</h2>
       <div id="friendsList"></div>
     </div>
+  </div>
+</div>
+
+<!-- ============================== PLAYER PROFILE (public) ============================== -->
+<div id="screen-player" class="hidden">
+  <button class="back-link" id="playerBackBtn">&lsaquo; Back</button>
+  <div class="topbar" style="padding-top:0;">
+    <div class="brand">
+      <span class="brand-mark" data-brandmark></span>
+      <span class="brand-text">
+        <span class="brand-name">Cricket <b>Connect</b></span>
+        <span class="brand-sub">PLAYER PROFILE</span>
+      </span>
+    </div>
+    <div class="topbar-actions">
+      <button class="icon-btn" id="playerShareBtn">Share</button>
+    </div>
+  </div>
+
+  <div class="card player-header-card">
+    <div class="player-header-top">
+      <div class="avatar-big-wrap" id="playerAvatarBig"></div>
+      <div class="player-header-info">
+        <div class="player-name" id="playerNameEl">Player</div>
+        <div class="player-role-row" id="playerRoleRow"></div>
+        <div class="player-loc stat-dim" id="playerLocEl"></div>
+      </div>
+    </div>
+    <div class="player-rating-chip">
+      <span class="prc-star">&#9733;</span><span id="playerRatingVal">Rating — coming soon</span>
+    </div>
+  </div>
+
+  <div class="stat-strip" id="playerStatStrip"></div>
+
+  <div class="pill-row" id="playerTabs">
+    <button class="pill active" data-pt="overview">Overview</button>
+    <button class="pill" data-pt="batting">Batting</button>
+    <button class="pill" data-pt="bowling">Bowling</button>
+    <button class="pill" data-pt="recent">Recent</button>
+    <button class="pill" data-pt="teams">Teams</button>
+    <button class="pill" data-pt="tournaments">Tournaments</button>
+    <button class="pill" data-pt="achievements">Achievements</button>
+  </div>
+
+  <div id="ptOverview"></div>
+  <div id="ptBatting" class="hidden"></div>
+  <div id="ptBowling" class="hidden"></div>
+  <div id="ptRecent" class="hidden"></div>
+  <div id="ptTeams" class="hidden"></div>
+  <div id="ptTournaments" class="hidden"></div>
+  <div id="ptAchievements" class="hidden"></div>
+
+  <div class="brand-footer">
+    <div class="bf-name">Cricket Connect</div>
+    <div class="bf-tag">Gully to Gallery.</div>
   </div>
 </div>
 

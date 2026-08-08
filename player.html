@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Player Profile — Cricket Connect</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="description" content="A player's digital cricket CV on Cricket Connect — real stats, teams and tournaments.">
+<meta name="theme-color" content="#060b14">
+<link rel="apple-touch-icon" href="./icon-180.png">
+<link rel="icon" href="./icon-192.png">
+<link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+<div id="app">
+
+  <div class="topbar">
+    <div class="brand">
+      <span class="brand-mark" id="playerBrandMark"></span>
+      <span class="brand-text">
+        <span class="brand-name">Cricket <b>Connect</b></span>
+        <span class="brand-sub">PLAYER PROFILE</span>
+      </span>
+    </div>
+  </div>
+
+  <div id="loadingBox">
+    <div class="spinner"></div>
+    <div class="empty-note">Loading profile&hellip;</div>
+  </div>
+
+  <div id="errorBox" class="hidden">
+    <div class="card">
+      <h2>Profile not available</h2>
+      <div class="empty-note" id="errorText">
+        This player hasn't set up a public profile, or the link is incorrect.
+      </div>
+      <a href="./index.html" class="btn secondary" style="margin-top:12px;display:block;text-align:center;text-decoration:none;">Open Cricket Connect</a>
+    </div>
+  </div>
+
+  <div id="playerBox" class="hidden">
+    <div class="card player-header-card">
+      <div class="player-header-top">
+        <div class="avatar-big-wrap" id="pvAvatar"></div>
+        <div class="player-header-info">
+          <div class="player-name" id="pvName">Player</div>
+          <div class="player-role-row" id="pvRoleRow"></div>
+          <div class="player-loc stat-dim" id="pvLoc"></div>
+        </div>
+      </div>
+      <div class="player-rating-chip">
+        <span class="prc-star">&#9733;</span><span>Rating — coming soon</span>
+      </div>
+    </div>
+
+    <div class="card" id="pvBioCard" style="display:none;">
+      <div class="stat-dim" id="pvBio"></div>
+    </div>
+
+    <div class="card">
+      <h2>Full stats, teams &amp; tournaments</h2>
+      <div class="empty-note">
+        This player's match history lives inside the Cricket Connect app on the device(s)
+        it was scored from — there's no cross-account public stats index yet, so this
+        shared page can only show their public identity for now. Open the app to see full,
+        real stats when you're viewing your own profile or matches you've scored yourself.
+      </div>
+      <a href="./index.html" class="btn" style="margin-top:10px;display:block;text-align:center;text-decoration:none;">Open Cricket Connect</a>
+    </div>
+
+    <div class="brand-footer">
+      <div class="bf-name">Cricket Connect</div>
+      <div class="bf-tag">Gully to Gallery.</div>
+    </div>
+  </div>
+
+</div>
+
+<script type="module">
+import { fetchPublicPlayerCard } from './cloud.js';
+import { isConfigured } from './supabase-config.js';
+import { avatarSVG, initialsBadge, brandMark } from './avatars.js';
+
+const $ = (id)=>document.getElementById(id);
+$('playerBrandMark').innerHTML = brandMark(34);
+
+const params = new URLSearchParams(location.search);
+const handle = params.get('u');
+
+function esc(s){
+  return String(s == null ? '' : s)
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+    .replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+}
+
+function showError(msg){
+  $('loadingBox').classList.add('hidden');
+  $('playerBox').classList.add('hidden');
+  $('errorBox').classList.remove('hidden');
+  if(msg) $('errorText').textContent = msg;
+}
+
+function render(p){
+  $('loadingBox').classList.add('hidden');
+  $('errorBox').classList.add('hidden');
+  $('playerBox').classList.remove('hidden');
+
+  $('pvAvatar').innerHTML = p.photo ? `<img src="${esc(p.photo)}" alt="Player photo">`
+    : p.avatarId ? avatarSVG(p.avatarId, 76) : initialsBadge(p.displayName || p.handle, 76);
+  $('pvName').textContent = p.displayName || ('@' + p.handle);
+  $('pvRoleRow').innerHTML = [
+    p.isOrganiser ? '<span class="role-badge organiser">Organiser</span>' : '',
+    '<span class="stat-dim">@' + esc(p.handle) + '</span>'
+  ].filter(Boolean).join(' ');
+  const loc = [p.district || p.area, p.country].filter(Boolean).join(', ');
+  $('pvLoc').textContent = loc;
+  if(p.bio){ $('pvBioCard').style.display = ''; $('pvBio').textContent = p.bio; }
+}
+
+/* ---- boot ---- */
+if(!handle){
+  showError('No player specified in the link.');
+} else if(!isConfigured()){
+  showError('This deployment has no Supabase configuration yet, so public profiles are not enabled.');
+} else {
+  fetchPublicPlayerCard(handle).then(p=>{
+    if(!p) showError("This player hasn't set up a public profile, or the link is incorrect.");
+    else render(p);
+  }).catch(err=>{
+    console.error(err);
+    showError('Could not load this profile. Check the link and try again.');
+  });
+}
+</script>
+</body>
+</html>

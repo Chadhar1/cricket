@@ -25,7 +25,8 @@ import { AVATARS, DEFAULT_AVATAR, avatarSVG, initialsBadge, brandMark, brandLock
 import {
   buildCareers, topRunScorers, topWicketTakers, bestAverages, bestEconomy,
   bestBattingPerformances, bestBowlingPerformances, teamRecords, overallSummary,
-  findPlayer
+  findPlayer, matchesForPlayer, preferredFormat, derivedRole, teamsForPlayer,
+  tournamentsForTeams
 } from './stats.js';
 
 import {
@@ -83,6 +84,9 @@ let friendResults = [];
 let profileCache = {};
 let pendingApps = [];
 let adminOverview = { organisers:0, tournaments:0, matches:0, tournamentsList:[] };
+let viewedPlayer = null;      // { uid, name, isSelf } — who the player screen is showing
+let playerTab = 'overview';
+let playerReturnScreen = 'home';
 
 const $ = (id)=>document.getElementById(id);
 
@@ -156,7 +160,7 @@ function isSignedIn(){ return cloudReady() && !!getUser(); }
 function requiresAccount(){ return cloudReady(); }
 
 /* ---------------- navigation ---------------- */
-const SCREENS = ['auth','home','setup','live','result','history','teams','tournaments','tournament','stats','profile','friends','admin'];
+const SCREENS = ['auth','home','setup','live','result','history','teams','tournaments','tournament','stats','profile','friends','admin','player'];
 const TAB_OF = { home:'home', tournaments:'tournaments', tournament:'tournaments',
                  teams:'teams', stats:'profile', history:'history', profile:'profile',
                  friends:'friends', admin:'admin' };
@@ -505,8 +509,10 @@ function renderFriends(){
     else if(action === 'respond') btn = `<button class="icon-btn" data-action="accept-friend" data-id="${esc(conn.id)}">Accept</button>`;
     else btn = `<span class="badge open">Friends</span>`;
     return `<div class="list-pick">
-      ${initialsBadge(p.displayName || p.handle, 34)}
-      <div class="lp-n">${esc(p.displayName || '')} <span class="stat-dim">@${esc(p.handle)}</span></div>
+      <div class="lp-identity" data-action="view-player" data-uid="${esc(p.uid)}" style="display:flex;align-items:center;gap:10px;flex:1;min-width:0;cursor:pointer;">
+        ${initialsBadge(p.displayName || p.handle, 34)}
+        <div class="lp-n">${esc(p.displayName || '')} <span class="stat-dim">@${esc(p.handle)}</span></div>
+      </div>
       ${btn}
     </div>`;
   }).join('') : '<div class="empty-note">Search a username above to find players.</div>';
@@ -518,8 +524,10 @@ function renderFriends(){
     const other = c.members.find(m=>m !== me);
     const p = profileCache[other] || { displayName:'Player', handle:'' };
     return `<div class="list-pick">
-      ${initialsBadge(p.displayName || p.handle, 34)}
-      <div class="lp-n">${esc(p.displayName || '')} <span class="stat-dim">@${esc(p.handle)}</span></div>
+      <div class="lp-identity" data-action="view-player" data-uid="${esc(other)}" style="display:flex;align-items:center;gap:10px;flex:1;min-width:0;cursor:pointer;">
+        ${initialsBadge(p.displayName || p.handle, 34)}
+        <div class="lp-n">${esc(p.displayName || '')} <span class="stat-dim">@${esc(p.handle)}</span></div>
+      </div>
       <button class="icon-btn" data-action="accept-friend" data-id="${esc(c.id)}">Accept</button>
       <button class="icon-btn" data-action="decline-friend" data-id="${esc(c.id)}">Decline</button>
     </div>`;
@@ -530,8 +538,10 @@ function renderFriends(){
     const other = c.members.find(m=>m !== me);
     const p = profileCache[other] || { displayName:'Player', handle:'' };
     return `<div class="list-pick">
-      ${initialsBadge(p.displayName || p.handle, 34)}
-      <div class="lp-n">${esc(p.displayName || '')} <span class="stat-dim">@${esc(p.handle)}</span></div>
+      <div class="lp-identity" data-action="view-player" data-uid="${esc(other)}" style="display:flex;align-items:center;gap:10px;flex:1;min-width:0;cursor:pointer;">
+        ${initialsBadge(p.displayName || p.handle, 34)}
+        <div class="lp-n">${esc(p.displayName || '')} <span class="stat-dim">@${esc(p.handle)}</span></div>
+      </div>
       <button class="icon-btn" data-action="unfriend" data-id="${esc(c.id)}">Remove</button>
     </div>`;
   }).join('') : '<div class="empty-note">No friends yet — search a username above.</div>';
@@ -767,25 +777,298 @@ function renderMyStats(){
 }
 
 /* Achievements — real, computed from data that already exists. Locked
-   badges are an honest "not yet", not a fake progress bar. */
-function renderAchievements(){
-  const careers = buildCareers(mergedHistory().filter(m=>m.completed));
-  const mine = findPlayer(careers, displayName());
-  const streak = (myPublicProfile && myPublicProfile.streakLongest) || 0;
+   badges are an honest "not yet", not a fake progress bar. Shared between
+   the home screen (always "me") and the public player profile (anyone
+   whose matches/teams/tournaments are locally known) so the badge
+   definitions live in exactly one place. */
+function achievementBadges({ hasMatch, teamsCount, toursCount, career, streak, includeStreak }){
   const badges = [
-    { id:'first-match', label:'First Match', icon:'<rect x="3" y="4" width="18" height="14" rx="2"/><path d="M7 9h4M7 13h7"/>', on: mergedHistory().some(m=>m.completed) },
-    { id:'first-team', label:'First Team', icon:'<circle cx="9" cy="8" r="3"/><path d="M3 20v-1a5 5 0 015-5h2a5 5 0 015 5v1"/>', on: teams.length > 0 },
-    { id:'first-tournament', label:'First Tournament', icon:'<path d="M6 4h12v5a6 6 0 01-12 0z"/><path d="M10 19h4M12 15v4"/>', on: tournaments.length > 0 },
-    { id:'streak-7', label:'7-Day Streak', icon:'<path d="M12 2s6 5.5 6 11a6 6 0 11-12 0c0-2 1-3.5 2-5 .5 2 1.5 2.5 1.5 2.5C9 7 12 2 12 2z"/>', on: streak >= 7 },
-    { id:'streak-30', label:'30-Day Streak', icon:'<path d="M12 2s6 5.5 6 11a6 6 0 11-12 0c0-2 1-3.5 2-5 .5 2 1.5 2.5 1.5 2.5C9 7 12 2 12 2z"/>', on: streak >= 30 },
-    { id:'century', label:'Century Scorer', icon:'<circle cx="12" cy="12" r="9"/><path d="M9 12l2 2 4-4"/>', on: !!(mine && mine.hundreds > 0) },
-    { id:'five-wickets', label:'5-Wicket Haul', icon:'<circle cx="12" cy="12" r="9"/><path d="M9 12l2 2 4-4"/>', on: !!(mine && mine.fiveFers > 0) }
+    { id:'first-match', label:'First Match', icon:'<rect x="3" y="4" width="18" height="14" rx="2"/><path d="M7 9h4M7 13h7"/>', on: hasMatch },
+    { id:'first-team', label:'First Team', icon:'<circle cx="9" cy="8" r="3"/><path d="M3 20v-1a5 5 0 015-5h2a5 5 0 015 5v1"/>', on: teamsCount > 0 },
+    { id:'first-tournament', label:'First Tournament', icon:'<path d="M6 4h12v5a6 6 0 01-12 0z"/><path d="M10 19h4M12 15v4"/>', on: toursCount > 0 },
+    { id:'century', label:'Century Scorer', icon:'<circle cx="12" cy="12" r="9"/><path d="M9 12l2 2 4-4"/>', on: !!(career && career.hundreds > 0) },
+    { id:'five-wickets', label:'5-Wicket Haul', icon:'<circle cx="12" cy="12" r="9"/><path d="M9 12l2 2 4-4"/>', on: !!(career && career.fiveFers > 0) }
   ];
-  $('achGrid').innerHTML = badges.map(b=>`
+  if(includeStreak){
+    badges.splice(3, 0,
+      { id:'streak-7', label:'7-Day Streak', icon:'<path d="M12 2s6 5.5 6 11a6 6 0 11-12 0c0-2 1-3.5 2-5 .5 2 1.5 2.5 1.5 2.5C9 7 12 2 12 2z"/>', on: streak >= 7 },
+      { id:'streak-30', label:'30-Day Streak', icon:'<path d="M12 2s6 5.5 6 11a6 6 0 11-12 0c0-2 1-3.5 2-5 .5 2 1.5 2.5 1.5 2.5C9 7 12 2 12 2z"/>', on: streak >= 30 }
+    );
+  }
+  return badges;
+}
+
+function achievementBadgesHTML(badges){
+  return badges.map(b=>`
     <div class="ach-badge ${b.on ? 'on' : ''}" title="${b.on ? 'Unlocked' : 'Not yet unlocked'}">
       <span class="ach-ico"><svg viewBox="0 0 24 24">${b.icon}</svg></span>
       <span class="ach-l">${esc(b.label)}</span>
     </div>`).join('');
+}
+
+function renderAchievements(){
+  const careers = buildCareers(mergedHistory().filter(m=>m.completed));
+  const mine = findPlayer(careers, displayName());
+  const streak = (myPublicProfile && myPublicProfile.streakLongest) || 0;
+  const badges = achievementBadges({
+    hasMatch: mergedHistory().some(m=>m.completed),
+    teamsCount: teams.length, toursCount: tournaments.length,
+    career: mine, streak, includeStreak: true
+  });
+  $('achGrid').innerHTML = achievementBadgesHTML(badges);
+}
+
+/* ===========================================================================
+   PUBLIC PLAYER PROFILE
+   A player's "digital cricket CV". Identity (name/handle/avatar/location)
+   comes from the profiles table when we know who the player is on the
+   platform (their uid) — via fetchPublicProfile/profileCache, same as the
+   Friends screen already uses. Stats/teams/tournaments come from
+   stats.js, run over whatever matches/teams/tournaments this device
+   already knows about (mergedHistory() + the local teams/tournaments
+   arrays) — there is no cross-account query for "everything player X has
+   ever played", so a player viewed by bare name (no uid, e.g. tapping a
+   leaderboard row) still gets real stats when they appear in locally-known
+   matches, and an honest empty state when they don't.
+   =========================================================================== */
+
+function avatarHTMLFor(person, size){
+  if(person && person.photo) return `<img src="${esc(person.photo)}" alt="Player photo">`;
+  if(person && person.avatarId) return avatarSVG(person.avatarId, size);
+  return initialsBadge((person && (person.displayName || person.name)) || '?', size);
+}
+
+function normName(s){ return String(s || '').trim().toLowerCase(); }
+
+/* Opens the player screen. Pass { uid } when the viewer came from somewhere
+   that knows who the player is on the platform (friends, search, "my
+   profile"); pass { name } when only a scored-match name is known
+   (leaderboard, team roster). Either works — identity fields simply stay
+   empty when there's no uid to resolve. */
+async function openPlayerProfile({ uid, name } = {}){
+  playerReturnScreen = screen;
+  let resolvedName = name;
+  if(uid){
+    if(!profileCache[uid]) await resolveProfiles([uid]);
+    const pub = profileCache[uid];
+    resolvedName = resolvedName || (pub && pub.displayName) || (pub && pub.handle) || 'Player';
+  }
+  if(!resolvedName){ toast('No player to show'); return; }
+  const me = getUser();
+  const isSelf = (uid && me && uid === me.id) || (!uid && normName(resolvedName) === normName(displayName()));
+  viewedPlayer = { uid: uid || (isSelf && me ? me.id : null), name: resolvedName, isSelf };
+  playerTab = 'overview';
+  go('player');
+}
+
+function playerShareUrl(handle){
+  return location.origin + location.pathname.replace(/index\.html$/, '') + 'player.html?u=' + encodeURIComponent(handle);
+}
+
+function playerIdentity(){
+  const vp = viewedPlayer;
+  if(!vp) return null;
+  const pub = vp.uid ? profileCache[vp.uid] : null;
+  if(vp.isSelf){
+    return {
+      name: displayName(),
+      handle: myPublicProfile && myPublicProfile.handle,
+      avatar: avatarHTML(84),
+      isOrganiser: !!(myPublicProfile && myPublicProfile.isOrganiser),
+      location: [profile.district || profile.area, profile.country].filter(Boolean).join(', ')
+    };
+  }
+  return {
+    name: (pub && pub.displayName) || vp.name,
+    handle: pub && pub.handle,
+    avatar: pub ? avatarHTMLFor(pub, 84) : initialsBadge(vp.name, 84),
+    isOrganiser: !!(pub && pub.isOrganiser),
+    location: pub ? [pub.district || pub.area, pub.country].filter(Boolean).join(', ') : ''
+  };
+}
+
+function renderPlayerProfile(){
+  const vp = viewedPlayer;
+  if(!vp){ go('home'); return; }
+
+  const id = playerIdentity();
+  $('playerAvatarBig').innerHTML = id.avatar;
+  $('playerNameEl').textContent = id.name;
+
+  const ms = allCompletedMatches();
+  const careers = buildCareers(ms);
+  const career = findPlayer(careers, vp.name);
+  const playerMatches = matchesForPlayer(ms, vp.name);
+  const role = derivedRole(career);
+  const fmt = preferredFormat(playerMatches);
+  const myTeams = teamsForPlayer(teams, vp.name);
+  const myTours = tournamentsForTeams(tournaments, myTeams.map(t=>t.name));
+
+  $('playerRoleRow').innerHTML = [
+    role ? `<span class="role-badge">${esc(role)}</span>` : '',
+    id.isOrganiser ? `<span class="role-badge organiser">Organiser</span>` : '',
+    id.handle ? `<span class="stat-dim">@${esc(id.handle)}</span>` : ''
+  ].filter(Boolean).join(' ');
+  $('playerLocEl').textContent = id.location || (fmt ? 'Mostly plays ' + fmt : '');
+  $('playerRatingVal').textContent = 'Rating — coming soon';
+
+  $('playerStatStrip').innerHTML = [
+    { v: career ? career.matches : 0, l:'Matches' },
+    { v: career ? career.runs : 0,    l:'Runs' },
+    { v: career ? career.wickets : 0, l:'Wickets' },
+    { v: career && career.average !== null ? career.average : '—', l:'Bat Avg' }
+  ].map(c=>`<div class="stat-box"><div class="sv">${esc(c.v)}</div><div class="sl">${esc(c.l)}</div></div>`).join('');
+
+  document.querySelectorAll('#playerTabs .pill').forEach(p=>
+    p.classList.toggle('active', p.dataset.pt === playerTab));
+  [['overview','ptOverview'],['batting','ptBatting'],['bowling','ptBowling'],['recent','ptRecent'],
+   ['teams','ptTeams'],['tournaments','ptTournaments'],['achievements','ptAchievements']]
+    .forEach(([k,elId])=>$(elId).classList.toggle('hidden', playerTab !== k));
+
+  if(playerTab === 'overview') renderPlayerOverview(career, playerMatches, fmt);
+  else if(playerTab === 'batting') renderPlayerBatting(career, playerMatches);
+  else if(playerTab === 'bowling') renderPlayerBowling(career, playerMatches);
+  else if(playerTab === 'recent') renderPlayerRecent(playerMatches);
+  else if(playerTab === 'teams') renderPlayerTeams(myTeams);
+  else if(playerTab === 'tournaments') renderPlayerTournaments(myTours);
+  else if(playerTab === 'achievements') renderPlayerAchievements(vp, career, myTeams, myTours, playerMatches);
+}
+
+function trendBars(values, label){
+  if(!values.length) return '';
+  const max = Math.max(1, ...values.map(v=>Math.abs(v)));
+  return `<div class="trend-block">
+    <div class="trend-label">${esc(label)}</div>
+    <div class="trend-bars">${values.map(v=>
+      `<div class="trend-bar" style="height:${Math.max(6, Math.round((Math.abs(v)/max)*54))}px" title="${esc(v)}"><span>${esc(v)}</span></div>`
+    ).join('')}</div>
+  </div>`;
+}
+
+function renderPlayerOverview(career, playerMatches, fmt){
+  if(!career || !playerMatches.length){
+    $('ptOverview').innerHTML = `<div class="card"><div class="empty-note">
+      No matches found for this player yet in the matches this device knows about.<br>
+      Scores here update automatically once a match involving them is completed.</div></div>`;
+    return;
+  }
+  const recent = playerMatches.slice(0, 8).slice().reverse(); // oldest → newest, left to right
+  const runsTrend = recent.filter(m=>m.runs !== null).map(m=>m.runs);
+  const wktsTrend = recent.filter(m=>m.wickets !== null).map(m=>m.wickets);
+  $('ptOverview').innerHTML = `
+    <div class="card">
+      <div class="sec-head"><h2>Career summary</h2></div>
+      <div class="stat-dim">
+        ${career.innings} batting inns · ${career.bowlInnings} bowling inns
+        ${fmt ? ' · mostly ' + esc(fmt) : ''}
+      </div>
+    </div>
+    <div class="card">
+      <div class="sec-head"><h2>Recent performance</h2></div>
+      ${runsTrend.length ? trendBars(runsTrend, 'Runs — last ' + runsTrend.length + ' innings') : '<div class="empty-note">No batting innings yet.</div>'}
+      ${wktsTrend.length ? trendBars(wktsTrend, 'Wickets — last ' + wktsTrend.length + ' innings') : ''}
+      <div class="stat-dim" style="margin-top:10px;">Rating trend isn't shown — Cricket Connect doesn't have a rating model yet.</div>
+    </div>`;
+}
+
+function renderPlayerBatting(career, playerMatches){
+  const innings = playerMatches.filter(m=>m.runs !== null);
+  if(!career || !innings.length){
+    $('ptBatting').innerHTML = '<div class="card"><div class="empty-note">No batting innings recorded yet.</div></div>';
+    return;
+  }
+  $('ptBatting').innerHTML = `
+    <div class="stat-strip">
+      ${[{v:career.innings,l:'Innings'},{v:career.average ?? '—',l:'Average'},{v:career.strikeRate,l:'S/R'},{v:career.hsText,l:'Best'}]
+        .map(c=>`<div class="stat-box"><div class="sv">${esc(c.v)}</div><div class="sl">${esc(c.l)}</div></div>`).join('')}
+    </div>
+    <div class="card">
+      <div class="sec-head"><h2>Batting log</h2></div>
+      ${innings.map(m=>`
+        <div class="rank-row" style="cursor:default;">
+          <div class="rank-body">
+            <div class="rank-name">${esc(m.teamA)} vs ${esc(m.teamB)}</div>
+            <div class="rank-sub">${esc(fmtWhen(m.date))}${m.resultText ? ' · ' + esc(m.resultText) : ''}</div>
+          </div>
+          <div class="rank-val"><div class="rv">${esc(m.runs)}${m.notOut ? '*' : ''}</div><div class="rl">(${esc(m.balls)})</div></div>
+        </div>`).join('')}
+    </div>`;
+}
+
+function renderPlayerBowling(career, playerMatches){
+  const spells = playerMatches.filter(m=>m.wickets !== null);
+  if(!career || !spells.length){
+    $('ptBowling').innerHTML = '<div class="card"><div class="empty-note">No bowling spells recorded yet.</div></div>';
+    return;
+  }
+  $('ptBowling').innerHTML = `
+    <div class="stat-strip">
+      ${[{v:career.wickets,l:'Wickets'},{v:career.economy,l:'Economy'},{v:career.bowlAvg ?? '—',l:'Average'},{v:career.best,l:'Best'}]
+        .map(c=>`<div class="stat-box"><div class="sv">${esc(c.v)}</div><div class="sl">${esc(c.l)}</div></div>`).join('')}
+    </div>
+    <div class="card">
+      <div class="sec-head"><h2>Bowling log</h2></div>
+      ${spells.map(m=>`
+        <div class="rank-row" style="cursor:default;">
+          <div class="rank-body">
+            <div class="rank-name">${esc(m.teamA)} vs ${esc(m.teamB)}</div>
+            <div class="rank-sub">${esc(fmtWhen(m.date))}${m.resultText ? ' · ' + esc(m.resultText) : ''}</div>
+          </div>
+          <div class="rank-val"><div class="rv">${esc(m.wickets)}/${esc(m.runsConceded)}</div><div class="rl">${esc(fmtOvers(m.legalBalls))} ov</div></div>
+        </div>`).join('')}
+    </div>`;
+}
+
+function renderPlayerRecent(playerMatches){
+  if(!playerMatches.length){
+    $('ptRecent').innerHTML = '<div class="card"><div class="empty-note">No completed matches yet.</div></div>';
+    return;
+  }
+  $('ptRecent').innerHTML = `<div class="card">
+    <div class="sec-head"><h2>Recent matches</h2></div>
+    ${playerMatches.map(m=>`
+      <div class="rank-row" style="cursor:default;">
+        <div class="rank-body">
+          <div class="rank-name">${esc(m.teamA)} vs ${esc(m.teamB)}</div>
+          <div class="rank-sub">${esc(fmtWhen(m.date))}${m.resultText ? ' · ' + esc(m.resultText) : ''}</div>
+        </div>
+        <div class="rank-val">
+          <div class="rv">${m.runs !== null ? esc(m.runs) + (m.notOut ? '*' : '') : '—'}</div>
+          <div class="rl">${m.wickets !== null ? esc(m.wickets) + ' wkt' + (m.wickets === 1 ? '' : 's') : ''}</div>
+        </div>
+      </div>`).join('')}
+  </div>`;
+}
+
+function renderPlayerTeams(myTeams){
+  $('ptTeams').innerHTML = myTeams.length ? `<div class="card">
+      <div class="sec-head"><h2>Teams</h2></div>
+      ${myTeams.map(t=>`
+        <div class="list-pick">
+          ${initialsBadge(t.name, 34)}
+          <div class="lp-n">${esc(t.name)}<div class="stat-dim">${(t.players||[]).length} player${(t.players||[]).length===1?'':'s'}</div></div>
+        </div>`).join('')}
+    </div>` : '<div class="card"><div class="empty-note">No teams found for this player yet.</div></div>';
+}
+
+function renderPlayerTournaments(myTours){
+  $('ptTournaments').innerHTML = myTours.length ? `<div class="card">
+      <div class="sec-head"><h2>Tournaments</h2></div>
+      ${myTours.map(t=>`
+        <button class="list-pick" data-action="open-tour" data-id="${esc(t.id)}" style="width:100%;text-align:left;background:none;border:none;border-bottom:1px solid var(--line);cursor:pointer;font-family:inherit;">
+          ${initialsBadge(t.name, 34)}
+          <div class="lp-n">${esc(t.name)}<div class="stat-dim">${(t.teams||[]).length} team${(t.teams||[]).length===1?'':'s'}</div></div>
+        </button>`).join('')}
+    </div>` : '<div class="card"><div class="empty-note">No tournaments found for this player yet.</div></div>';
+}
+
+function renderPlayerAchievements(vp, career, myTeams, myTours, playerMatches){
+  const streak = vp.isSelf ? ((myPublicProfile && myPublicProfile.streakLongest) || 0) : 0;
+  const badges = achievementBadges({
+    hasMatch: playerMatches.length > 0, teamsCount: myTeams.length, toursCount: myTours.length,
+    career, streak, includeStreak: vp.isSelf
+  });
+  $('ptAchievements').innerHTML = `<div class="card"><div class="ach-grid">${achievementBadgesHTML(badges)}</div></div>`;
 }
 
 function renderHome(){
@@ -1777,7 +2060,7 @@ function rankCard(title, rows, fmt){
     <div class="sec-head"><h2>${esc(title)}</h2></div>
     ${rows.map((p,i)=>{
       const f = fmt(p);
-      return `<div class="rank-row">
+      return `<div class="rank-row" data-action="view-player" data-name="${esc(f.name || p.name)}" style="cursor:pointer;">
         <div class="rank-no">${i+1}</div>
         <div class="rank-body">
           <div class="rank-name">${esc(f.name || p.name)}</div>
@@ -2297,6 +2580,7 @@ function render(){
     case 'stats': renderStats(); break;
     case 'profile': renderProfile(); break;
     case 'friends': renderFriends(); break;
+    case 'player': renderPlayerProfile(); break;
     case 'admin':
       if(!isAdminUser){ go('home'); return; }
       renderAdmin();
@@ -2368,6 +2652,26 @@ function bind(){
   document.querySelectorAll('#statsTabs .pill').forEach(p=>
     p.addEventListener('click', ()=>{ statsTab = p.dataset.st; render(); }));
 
+  // player profile
+  document.querySelectorAll('#playerTabs .pill').forEach(p=>
+    p.addEventListener('click', ()=>{ playerTab = p.dataset.pt; render(); }));
+  $('playerBackBtn').addEventListener('click', ()=>go(playerReturnScreen || 'home'));
+  $('playerShareBtn').addEventListener('click', async ()=>{
+    const vp = viewedPlayer; if(!vp) return;
+    const handle = vp.isSelf ? (myPublicProfile && myPublicProfile.handle)
+      : (vp.uid && profileCache[vp.uid] && profileCache[vp.uid].handle);
+    if(!handle){
+      toast(vp.isSelf ? 'Set a username in My Profile first to get a shareable link'
+                       : "This player hasn't set a public username yet");
+      return;
+    }
+    try{
+      const url = playerShareUrl(handle);
+      if(navigator.share) await navigator.share({ title: vp.name + ' — Cricket Connect', url });
+      else { await navigator.clipboard.writeText(url); toast('Link copied'); }
+    }catch(e){ toast('Could not copy'); }
+  });
+
   // live
   $('liveHomeBtn').addEventListener('click', ()=>go('home'));
   document.querySelectorAll('.run-btn').forEach(b=>
@@ -2420,6 +2724,10 @@ function bind(){
     e.target.value = '';
   });
   $('exportDataBtn').addEventListener('click', exportData);
+  $('viewMyProfileBtn').addEventListener('click', ()=>{
+    const u = getUser();
+    openPlayerProfile(u ? { uid: u.id, name: displayName() } : { name: displayName() });
+  });
 
   // friends
   $('friendSearchBtn').addEventListener('click', doFriendSearch);
@@ -2513,6 +2821,7 @@ function bind(){
     else if(a === 'submit-organiser-app') submitApplyOrganiser();
     else if(a === 'approve-app') approveApp(el.dataset.id);
     else if(a === 'reject-app') rejectApp(el.dataset.id);
+    else if(a === 'view-player') openPlayerProfile({ uid: el.dataset.uid || null, name: el.dataset.name || null });
   });
 }
 

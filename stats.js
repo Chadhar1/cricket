@@ -138,6 +138,80 @@ export function findPlayer(careers, name){
 }
 
 /* ---------------------------------------------------------------------------
+   Single-player views — power the public player profile. All derived from
+   the same completed-match data everything else in this file uses; nothing
+   here is a stored/separate field.
+   --------------------------------------------------------------------------- */
+
+/* Every completed match a named player appears in (as batter and/or
+   bowler), most recent first. One line per match, not per innings — a
+   player who both bats and bowls in a match gets both halves on one row. */
+export function matchesForPlayer(matches, name){
+  const k = key(name);
+  if(!k) return [];
+  const out = [];
+  (matches || []).filter(m=>m && m.completed && Array.isArray(m.innings)).forEach(m=>{
+    let batting = null, bowling = null;
+    m.innings.forEach(inn=>{
+      (inn.batters || []).forEach(b=>{ if(key(b.name) === k && (b.balls > 0 || b.out)) batting = b; });
+      (inn.bowlers || []).forEach(b=>{ if(key(b.name) === k && b.legalBalls > 0) bowling = b; });
+    });
+    if(!batting && !bowling) return;
+    out.push({
+      matchId: m.id, date: m.createdAt, teamA: m.teamA, teamB: m.teamB,
+      resultText: m.resultText || '', oversLimit: m.oversLimit,
+      runs: batting ? batting.runs : null, balls: batting ? batting.balls : null,
+      notOut: batting ? !batting.out : null,
+      wickets: bowling ? bowling.wickets : null, runsConceded: bowling ? bowling.runs : null,
+      legalBalls: bowling ? bowling.legalBalls : null
+    });
+  });
+  return out.sort((a,b)=>(b.date || 0) - (a.date || 0));
+}
+
+/* Most-played match length for a player — there is no stored "preferred
+   format" field, so this is an honest "what they actually play most",
+   derived from their own real matches. Null if they have none yet. */
+export function preferredFormat(playerMatches){
+  if(!playerMatches || !playerMatches.length) return null;
+  const counts = {};
+  playerMatches.forEach(m=>{
+    const label = m.oversLimit === 20 ? 'T20' : m.oversLimit === 50 ? 'ODI' : (m.oversLimit + '-over');
+    counts[label] = (counts[label] || 0) + 1;
+  });
+  return Object.entries(counts).sort((a,b)=>b[1] - a[1])[0][0];
+}
+
+/* Playing role, derived from real career totals — there is no stored
+   "role" field either. Purely descriptive of what the numbers already show. */
+export function derivedRole(career){
+  if(!career) return null;
+  const bats = career.runs > 0 || career.innings > 0;
+  const bowls = career.wickets > 0 || career.bowlInnings > 0;
+  if(bats && bowls) return 'All-rounder';
+  if(bats) return 'Batter';
+  if(bowls) return 'Bowler';
+  return null;
+}
+
+/* Teams (from the locally-known team list) whose saved roster includes
+   this player by name. */
+export function teamsForPlayer(teams, name){
+  const k = key(name);
+  if(!k) return [];
+  return (teams || []).filter(t=>(t.players || []).some(p=>key(p) === k));
+}
+
+/* Tournaments whose entrant list includes any of the given team names —
+   matched by name, the same loose identity the tournament screen already
+   uses for ad-hoc (not-saved) teams. */
+export function tournamentsForTeams(tournaments, teamNames){
+  const names = new Set((teamNames || []).map(key));
+  if(!names.size) return [];
+  return (tournaments || []).filter(t=>(t.teams || []).some(tt=>names.has(key(tt.name))));
+}
+
+/* ---------------------------------------------------------------------------
    Single innings highlights across all matches — "best performances".
    --------------------------------------------------------------------------- */
 export function bestBattingPerformances(matches, limit = 5){

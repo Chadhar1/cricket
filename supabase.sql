@@ -519,6 +519,21 @@ create policy "public tournaments are readable by anyone"
   using (is_public = true);
 
 -- ---------------------------------------------------------------------------
+-- MIGRATION — public player profiles. A profile becomes readable by anyone,
+-- signed in or not, only once its owner has claimed a public handle — the
+-- same "I want to be findable" signal the rest of the app already uses for
+-- friend search. Profiles without a handle keep the existing behavior
+-- (visible only to other signed-in users). This only ADDS a read path; the
+-- app's own public-profile queries (fetchPublicPlayerCard) also request a
+-- narrow column list, not '*', so admin/points/streak fields are never
+-- fetched for this route even though RLS would otherwise allow the row.
+-- ---------------------------------------------------------------------------
+drop policy if exists "profiles with a public handle are readable by anyone" on public.profiles;
+create policy "profiles with a public handle are readable by anyone"
+  on public.profiles for select
+  using (handle is not null);
+
+-- ---------------------------------------------------------------------------
 -- Bootstrap: run this yourself once, after you've signed up in the app, to
 -- become the first admin. Replace with your actual auth user id.
 -- ---------------------------------------------------------------------------
