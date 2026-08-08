@@ -78,8 +78,10 @@ body.app{user-select:none;}
 .hidden{display:none !important;}
 
 .card{
-  background:var(--bg-2); border:1px solid var(--line);
+  background:linear-gradient(160deg, var(--bg-2) 0%, var(--bg-1) 100%);
+  border:1px solid var(--line);
   border-radius:16px; padding:16px; margin-bottom:14px;
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.04);
 }
 .card h2{margin:0 0 12px; font-size:15px; letter-spacing:0; text-transform:none; color:var(--ink); font-weight:600;}
 label{display:block; font-size:12px; color:var(--ink-dim); margin:10px 0 4px;}
@@ -688,7 +690,8 @@ table.table-std td.team{white-space:normal; font-weight:600;}
 /* Stats screen */
 .stat-strip{display:grid; grid-template-columns:repeat(4,1fr); gap:8px; margin-bottom:14px;}
 .stat-box{
-  background:var(--card-bg); border:1px solid var(--card-border);
+  background:linear-gradient(160deg, var(--bg-2) 0%, var(--bg-1) 100%);
+  border:1px solid var(--card-border);
   border-radius:12px; padding:11px 6px; text-align:center;
 }
 .stat-box .sv{font-size:18px; font-weight:700; line-height:1.1;}
@@ -776,9 +779,13 @@ button:focus-visible, input:focus-visible, select:focus-visible, .chip:focus-vis
 
 /* ---- Hero banner ---- */
 .hero{
-  position:relative; overflow:hidden; border-radius:18px; margin-bottom:16px;
-  background:linear-gradient(115deg, #0d1c14 0%, #102b1c 45%, #0a1410 100%);
+  position:relative; overflow:hidden; border-radius:20px; margin-bottom:16px;
+  background:
+    radial-gradient(120% 140% at 100% -10%, rgba(22,163,74,.22), transparent 55%),
+    radial-gradient(90% 120% at -10% 115%, rgba(242,183,5,.12), transparent 60%),
+    linear-gradient(160deg, var(--bg-1) 0%, var(--bg-0) 100%);
   border:1px solid var(--line-2); padding:26px 20px;
+  box-shadow:0 20px 50px -20px rgba(0,0,0,.6), inset 0 1px 0 rgba(255,255,255,.05);
 }
 .hero::after{
   content:""; position:absolute; right:-70px; top:-70px; width:300px; height:300px;
@@ -794,7 +801,12 @@ button:focus-visible, input:focus-visible, select:focus-visible, .chip:focus-vis
 }
 .hero .hero-kicker{
   font-size:12px; font-weight:600; letter-spacing:1.6px; text-transform:uppercase;
-  color:var(--acc-2); margin-bottom:10px; position:relative;
+  color:var(--gold-soft); margin-bottom:10px; position:relative;
+  display:inline-flex; align-items:center; gap:6px;
+}
+.hero .hero-kicker::before{
+  content:""; width:6px; height:6px; border-radius:50%; background:var(--gold);
+  box-shadow:0 0 8px var(--gold);
 }
 .hero p{
   margin:10px 0 0; font-size:13.5px; color:var(--ink-2); line-height:1.65;
@@ -846,10 +858,12 @@ button:focus-visible, input:focus-visible, select:focus-visible, .chip:focus-vis
   display:grid; grid-template-columns:repeat(3,1fr); gap:10px; margin-bottom:16px;
 }
 .qa-item{
-  background:var(--bg-2); border:1px solid var(--line); border-radius:14px;
+  background:linear-gradient(160deg, var(--bg-2) 0%, var(--bg-1) 100%);
+  border:1px solid var(--line); border-radius:14px;
   padding:14px 10px; text-align:center; cursor:pointer; font-family:inherit;
+  transition:border-color .15s ease, transform .15s ease;
 }
-.qa-item:hover{border-color:var(--acc); background:var(--bg-3);}
+.qa-item:hover{border-color:var(--acc); background:var(--bg-3); transform:translateY(-1px);}
 .qa-ico{
   width:38px; height:38px; margin:0 auto 8px; border-radius:11px;
   background:var(--acc-glow); display:flex; align-items:center; justify-content:center;
