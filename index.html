@@ -175,26 +175,24 @@
     <div class="stat-dim" id="myStatsNote" style="margin-top:2px;"></div>
   </div>
 
-  <!-- ============ Featured tournaments (real: your own, honest about the rest) ============ -->
+  <!-- ============ Featured tournaments (your own) ============ -->
   <div class="card" id="homeTournamentsCard">
     <div class="sec-head"><h2>My Tournaments</h2>
       <button class="icon-btn" id="homeTournamentsSeeAll">See all</button>
     </div>
     <div id="homeTournamentsRail"></div>
     <div class="stat-dim" style="margin-top:10px;">
-      Public tournament discovery — browsing tournaments you haven't joined — is on the roadmap.
-      For now, tournaments you create or join show up here.
+      Tournaments you create or join show up here. Mark a tournament public when creating it
+      so other organisers can discover it below.
     </div>
   </div>
 
-  <!-- ============ Recommended tournaments (honest placeholder — no public
-       discovery data exists yet; see homeTournamentsCard note above) ============ -->
+  <!-- ============ Recommended tournaments (real data: other organisers'
+       tournaments marked public, via fetchPublicTournaments) ============ -->
   <div class="card" id="homeRecommendedCard">
     <div class="sec-head"><h2>Recommended Tournaments</h2></div>
-    <div class="stat-dim">
-      Personalised recommendations need public tournament discovery, which isn't built yet
-      (tournaments are private to their owner today). Once that lands, tournaments near you
-      or matching your role will show up here.
+    <div id="recommendedTourBox">
+      <div class="stat-dim">Loading…</div>
     </div>
   </div>
 

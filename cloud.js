@@ -224,10 +224,11 @@ export async function searchProfiles(query, max = 15){
 
 /* ---------------- generic collection sync ---------------- */
 
-async function saveRowIn(table, obj){
+async function saveRowIn(table, obj, extra = {}){
   if(!ready || !currentUser || !obj || !obj.id) return false;
   const { error } = await sb.from(table).upsert({
-    id: obj.id, user_id: currentUser.id, data: clean(obj), updated_at: new Date().toISOString()
+    id: obj.id, user_id: currentUser.id, data: clean(obj), updated_at: new Date().toISOString(),
+    ...extra
   });
   if(error){ console.error(`save ${table} failed:`, error); return false; }
   return true;
@@ -258,9 +259,23 @@ export const fetchTeams = ()=>fetchAllIn('teams');
 export const deleteTeam = (id)=>deleteRowIn('teams', id);
 
 /* tournaments */
-export const saveTournament    = (t)=>saveRowIn('tournaments', t);
+export const saveTournament    = (t)=>saveRowIn('tournaments', t, { is_public: !!t.isPublic });
 export const fetchTournaments  = ()=>fetchAllIn('tournaments');
 export const deleteTournament  = (id)=>deleteRowIn('tournaments', id);
+
+/* Public tournament discovery — real, RLS-backed (see supabase.sql's
+   "public tournaments are readable by anyone" policy). Only returns
+   tournaments their owner explicitly marked public; excludes your own
+   (those already show under "My Tournaments"). */
+export async function fetchPublicTournaments(max = 30){
+  if(!ready) return [];
+  let q = sb.from('tournaments').select('data')
+    .eq('is_public', true).order('updated_at', { ascending: false }).limit(max);
+  if(currentUser) q = q.neq('user_id', currentUser.id);
+  const { data, error } = await q;
+  if(error){ console.error('fetchPublicTournaments failed:', error); return []; }
+  return data.map(r=>r.data);
+}
 
 /* scheduled events */
 export const saveEvent   = (e)=>saveRowIn('events', e);

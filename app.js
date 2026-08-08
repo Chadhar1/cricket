@@ -43,7 +43,7 @@ import {
   submitOrganiserApplication, fetchMyOrganiserApplications,
   isCurrentUserAdmin, fetchPendingOrganiserApplications, countOrganisers,
   approveOrganiserApplication, rejectOrganiserApplication,
-  fetchPlatformStats, fetchPlatformTournaments, dailyCheckIn
+  fetchPlatformStats, fetchPlatformTournaments, dailyCheckIn, fetchPublicTournaments
 } from './cloud.js';
 
 import {
@@ -835,6 +835,7 @@ function renderHome(){
   renderNextMatch();
   renderMyStats();
   renderAchievements();
+  renderRecommendedTournaments();
   $('homeGuestCta').classList.toggle('hidden', !!u);
 }
 
@@ -855,6 +856,31 @@ function renderHomeTournaments(){
     </button></div>`;
   box.querySelectorAll('[data-home-tournament]').forEach(b=>
     b.addEventListener('click', ()=>go('tournaments')));
+}
+
+async function renderRecommendedTournaments(){
+  const box = $('recommendedTourBox');
+  if(!box) return;
+  if(!cloudReady()){
+    box.innerHTML = `<div class="stat-dim">Public tournament discovery needs the cloud connection. In local-only mode there's no way to see other organisers' tournaments.</div>`;
+    return;
+  }
+  box.innerHTML = `<div class="stat-dim">Loading…</div>`;
+  let list = [];
+  try{ list = await fetchPublicTournaments(6); }
+  catch(e){ console.error('renderRecommendedTournaments failed:', e); }
+  if(!box.isConnected) return; // screen changed while awaiting
+  if(!list.length){
+    box.innerHTML = `<div class="stat-dim">No public tournaments yet. When an organiser marks one public, it'll show up here.</div>`;
+    return;
+  }
+  box.innerHTML = `<div class="mini-rail">` +
+    list.map(t=>`
+      <div class="mini-card" style="cursor:default;">
+        <div class="mc-t">${esc(t.name)}</div>
+        <div class="mc-s">${(t.teams || []).length} team${(t.teams || []).length === 1 ? '' : 's'}${t.format ? ' · ' + esc(t.format) : ''}</div>
+      </div>`).join('') +
+    `</div>`;
 }
 
 function renderHomeTeams(){
@@ -1883,6 +1909,13 @@ function openNewTournamentModal(){
     <label>Double round robin?</label>
     <select id="tLegs"><option value="1">No — play each team once</option>
       <option value="2">Yes — home and away</option></select>
+    <div class="toggle-line" style="margin-top:14px;">
+      <div>
+        <div style="font-size:14px;font-weight:600;">Make this tournament public</div>
+        <div class="stat-dim" id="tPublicHint">Anyone can find it under Recommended Tournaments${cloudReady() && getUser() ? '' : ' (requires sign-in)'}</div>
+      </div>
+      <label class="switch"><input type="checkbox" id="tPublicToggle" ${cloudReady() && getUser() ? '' : 'disabled'}><span class="slider"></span></label>
+    </div>
     <button class="btn" data-action="create-tour">Create Tournament</button>
     <button class="btn secondary" data-action="close">Cancel</button>`);
   window.__tSelected = new Set();
@@ -1918,6 +1951,8 @@ async function createTournamentFromForm(){
     teams: list
   });
   t.fixtures = generateRoundRobin(t, { legs: parseInt($('tLegs').value || '1', 10) });
+  const publicToggle = $('tPublicToggle');
+  t.isPublic = !!(publicToggle && !publicToggle.disabled && publicToggle.checked);
   tournaments.unshift(t); saveTours();
   if(cloudReady() && getUser()) await saveTournament(t);
   closeModal();

@@ -504,6 +504,21 @@ end;
 $$;
 
 -- ---------------------------------------------------------------------------
+-- MIGRATION — public tournament discovery. Tournaments stay private by
+-- default (is_public defaults to false, so every existing tournament keeps
+-- its current behavior: visible only to its owner and admins). Owners opt
+-- a tournament in when creating it. This only ADDS a new read path — the
+-- existing owner-only and admin-only select policies on public.tournaments
+-- are untouched, so nothing that worked before changes.
+-- ---------------------------------------------------------------------------
+alter table public.tournaments add column if not exists is_public boolean not null default false;
+
+drop policy if exists "public tournaments are readable by anyone" on public.tournaments;
+create policy "public tournaments are readable by anyone"
+  on public.tournaments for select
+  using (is_public = true);
+
+-- ---------------------------------------------------------------------------
 -- Bootstrap: run this yourself once, after you've signed up in the app, to
 -- become the first admin. Replace with your actual auth user id.
 -- ---------------------------------------------------------------------------
