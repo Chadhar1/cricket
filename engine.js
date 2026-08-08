@@ -3,6 +3,12 @@
    Kept separate so it can be unit-tested in isolation and reused anywhere.
    =========================================================================== */
 
+/* Dismissal types credited to the bowler's own wicket tally — standard
+   cricket scoring convention. Run outs, retirements and obstructing the
+   field still end the batter's innings (inn.wickets still increments) but
+   are not the bowler's wicket. */
+export const BOWLER_CREDITED_DISMISSALS = new Set(['Bowled','Caught','LBW','Stumped','Hit Wicket']);
+
 export function newBatter(name){
   return { name: name || 'Batter', runs:0, balls:0, fours:0, sixes:0, out:false, howOut:'' };
 }
@@ -176,7 +182,11 @@ export function playBall(match, ball){
   let wicketEndedInnings = false;
   if(ball.isWicket){
     inn.wickets += 1;
-    bowler.wickets += 1;
+    // Only these dismissal types are credited to the bowler's own tally —
+    // a run out, retirement or obstructing-the-field still ends the
+    // batter's innings and counts toward the team's fallen wickets, but is
+    // not a bowler's wicket in standard cricket scoring.
+    if(BOWLER_CREDITED_DISMISSALS.has(ball.wicketType)) bowler.wickets += 1;
     const outIdx = ball.whoOut === 'nonstriker' ? inn.nonStrikerIdx : inn.strikerIdx;
     inn.batters[outIdx].out = true;
     inn.batters[outIdx].howOut = ball.wicketType || 'out';

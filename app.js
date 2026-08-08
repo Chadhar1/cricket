@@ -1504,8 +1504,23 @@ function afterBall(res){
   if(res.overJustEnded){ openNewBowlerModal(); return; }
   render();
 }
+
+/* Guards every ball-scoring entry point (run buttons, extras, wickets)
+   against accidental double-submission — a fast double-tap on a touch
+   screen, or a stray double click, firing the same delivery twice. All
+   three entry points below call this before touching `match`, so a
+   duplicate tap inside the window is silently ignored rather than
+   recorded as a second ball. */
+let lastBallAt = 0;
+function ballLock(){
+  const now = Date.now();
+  if(now - lastBallAt < 350) return false;
+  lastBallAt = now;
+  return true;
+}
+
 function doRun(n){
-  if(!match || match.completed) return;
+  if(!match || match.completed || !ballLock()) return;
   snapshot();
   afterBall(playBall(match, { extra:null, batRuns:n, isWicket:false }));
 }
@@ -1583,7 +1598,8 @@ function openWicketModal(){
     .filter(p=>!inn.batters.some(b=>b.name.toLowerCase() === p.toLowerCase()));
   openModal(`<h3>Wicket</h3>
     <label>How out</label>
-    <select id="wkType">${['Bowled','Caught','LBW','Run Out','Stumped','Hit Wicket','Retired Out']
+    <select id="wkType">${['Bowled','Caught','LBW','Run Out','Stumped','Hit Wicket',
+      'Retired Out','Retired Hurt','Obstructing the Field','Other']
       .map(t=>`<option value="${t}">${t}</option>`).join('')}</select>
     <label>Which batter</label>
     <div class="radio-line"><input type="radio" name="whoOut" value="striker" id="woS" checked>
@@ -1601,6 +1617,7 @@ function openWicketModal(){
 }
 
 function submitWicket(){
+  if(!match || match.completed || !ballLock()) return;
   const inn = curInnings(match);
   const last = (inn.wickets + 1) >= inn.allOutWickets;
   const newName = last ? '' : ($('wkNewBatter').value || '').trim();
@@ -2973,6 +2990,7 @@ function bind(){
     else if(a === 'skip-toss'){ pendingToss = null; closeModal(); startMatch(null); }
     else if(a === 'start-super-over') startSuperOver(el.dataset.id);
     else if(a === 'extra-run'){
+      if(!match || match.completed || !ballLock()) return;
       const n = parseInt(el.dataset.n,10); const type = pendingExtra; pendingExtra = null;
       closeModal(); snapshot(); afterBall(playBall(match, { extra:type, batRuns:n, isWicket:false }));
     }
