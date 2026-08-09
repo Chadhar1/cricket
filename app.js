@@ -46,7 +46,8 @@ import {
   isCurrentUserAdmin, fetchPendingOrganiserApplications, countOrganisers,
   approveOrganiserApplication, rejectOrganiserApplication,
   fetchPlatformStats, fetchPlatformTournaments, dailyCheckIn, fetchPublicTournaments,
-  fetchTournamentById
+  fetchTournamentById,
+  fetchLiveMatchesNow, watchAllLiveMatches, joinPresence, subscribeOnlineCount
 } from './cloud.js';
 
 import {
@@ -88,7 +89,12 @@ let myConnections = [];
 let friendResults = [];
 let profileCache = {};
 let pendingApps = [];
-let adminOverview = { organisers:0, tournaments:0, matches:0, tournamentsList:[] };
+let adminOverview = { organisers:0, tournaments:0, matches:0, tournamentsList:[], liveMatches:0, liveTournaments:0 };
+let liveNowMatches = [];      // [{ id, match, location, updatedAt }] — currently-live, all users
+let liveNowFilter = '';
+let liveNowUnsub = null;      // realtime unsubscribe for the Live Now screen
+let onlineCount = null;       // live presence count, shown on the admin dashboard
+let onlineUnsub = null;
 let viewedPlayer = null;      // { uid, name, isSelf } — who the player screen is showing
 let playerTab = 'overview';
 let playerReturnScreen = 'home';
@@ -165,10 +171,10 @@ function isSignedIn(){ return cloudReady() && !!getUser(); }
 function requiresAccount(){ return cloudReady(); }
 
 /* ---------------- navigation ---------------- */
-const SCREENS = ['auth','home','setup','live','result','history','teams','tournaments','tournament','stats','profile','friends','admin','player'];
+const SCREENS = ['auth','home','setup','live','result','history','teams','tournaments','tournament','stats','profile','friends','admin','player','live-now'];
 const TAB_OF = { home:'home', tournaments:'tournaments', tournament:'tournaments',
                  teams:'teams', stats:'profile', history:'history', profile:'profile',
-                 friends:'friends', admin:'admin' };
+                 friends:'friends', admin:'admin', 'live-now':'live-now' };
 
 function go(s){ screen = s; render(); window.scrollTo(0,0); }
 
@@ -647,6 +653,8 @@ async function refreshAdminData(){
   adminOverview.organisers = orgCount;
   adminOverview.tournaments = platformStats.tournaments;
   adminOverview.matches = platformStats.matches;
+  adminOverview.liveMatches = platformStats.liveMatches;
+  adminOverview.liveTournaments = platformStats.liveTournaments;
   adminOverview.tournamentsList = platformTours;
   await resolveProfiles(pendingApps.map(a=>a.uid));
 }
@@ -656,6 +664,16 @@ function renderAdmin(){
   $('adminStatOrganisers').textContent = adminOverview.organisers;
   $('adminStatTournaments').textContent = adminOverview.tournaments;
   $('adminStatMatches').textContent = adminOverview.matches;
+  $('adminStatLiveMatches').textContent = adminOverview.liveMatches;
+  $('adminStatLiveTournaments').textContent = adminOverview.liveTournaments;
+
+  // Live presence count updates on its own timer (join/leave events), not
+  // tied to the refreshAdminData() pull above — subscribe once per visit to
+  // the admin screen (render() tears it down on navigating away).
+  if(!onlineUnsub){
+    $('adminStatOnline').textContent = '…';
+    onlineUnsub = subscribeOnlineCount(count=>{ $('adminStatOnline').textContent = count; });
+  }
 
   $('adminAppsList').innerHTML = pendingApps.length ? pendingApps.map(a=>{
     const p = profileCache[a.uid] || {};
@@ -2184,6 +2202,56 @@ function fmtDateRange(startDate, endDate){
   return '';
 }
 
+/* ---------------- live now: public, all-users "what's on" list ---------------- */
+
+async function renderLiveNow(){
+  const box = $('liveNowList');
+  box.innerHTML = '<div class="empty-note">Loading live matches&hellip;</div>';
+  liveNowMatches = await fetchLiveMatchesNow();
+  if(!liveNowUnsub){
+    liveNowUnsub = watchAllLiveMatches(()=>{ if(screen === 'live-now') renderLiveNow(); });
+  }
+  paintLiveNowList();
+}
+
+function paintLiveNowList(){
+  const box = $('liveNowList');
+  if(!box) return;
+  const q = liveNowFilter.trim().toLowerCase();
+  const rows = q ? liveNowMatches.filter(r=>(r.location || '').toLowerCase().includes(q)) : liveNowMatches;
+
+  if(!liveNowMatches.length){
+    box.innerHTML = `<div class="card"><div class="empty-note">
+      No matches are being scored live right now.<br>Start one yourself and turn on
+      <b>Share Live</b> during setup, or check back during a match.</div></div>`;
+    return;
+  }
+  if(!rows.length){
+    box.innerHTML = `<div class="card"><div class="empty-note">
+      No live matches match "${esc(liveNowFilter)}".
+      <button class="icon-btn" id="liveNowClearFilter" style="margin-top:8px;">Clear filter</button>
+    </div></div>`;
+    $('liveNowClearFilter').addEventListener('click', ()=>{
+      liveNowFilter = ''; $('liveNowAreaFilter').value = ''; paintLiveNowList();
+    });
+    return;
+  }
+
+  box.innerHTML = rows.map(r=>{
+    const m = r.match;
+    const line = (m && m.innings && m.innings[m.currentInningsIdx]) ? inningsLine(m, m.currentInningsIdx) : '';
+    return `
+    <a class="card live-now-card" href="./live.html?m=${esc(r.id)}" target="_blank" rel="noopener" style="display:block;margin-bottom:10px;">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;">
+        <b>${esc((m && m.teamA) || 'Team A')} <span class="stat-dim">vs</span> ${esc((m && m.teamB) || 'Team B')}</b>
+        <span class="pill-live mini">LIVE</span>
+      </div>
+      <div style="margin-top:4px;">${esc(line)}</div>
+      <div class="stat-dim" style="margin-top:2px;">${r.location ? esc(r.location) : 'Venue not given'}</div>
+    </a>`;
+  }).join('');
+}
+
 function renderTournaments(){
   const box = $('tournamentsList');
   if(!tournaments.length){
@@ -2783,11 +2851,18 @@ function render(){
     case 'profile': renderProfile(); break;
     case 'friends': renderFriends(); break;
     case 'player': renderPlayerProfile(); break;
+    case 'live-now': renderLiveNow(); break;
     case 'admin':
       if(!isAdminUser){ go('home'); return; }
       renderAdmin();
       break;
   }
+
+  // Tear down the two realtime subscriptions unique to this session (Live
+  // Now's all-matches feed, admin's presence count) when their screen isn't
+  // the one showing, so they don't keep running in the background forever.
+  if(screen !== 'live-now' && liveNowUnsub){ liveNowUnsub(); liveNowUnsub = null; }
+  if(screen !== 'admin' && onlineUnsub){ onlineUnsub(); onlineUnsub = null; }
 }
 
 /* ---------------- EVENTS ---------------- */
@@ -2840,6 +2915,8 @@ function bind(){
   $('qaTournament').addEventListener('click', ()=>go('tournaments'));
   $('qaTeams').addEventListener('click', ()=>go('teams'));
   $('qaHistory').addEventListener('click', ()=>go('history'));
+  $('qaLiveNow').addEventListener('click', ()=>go('live-now'));
+  $('liveNowAreaFilter').addEventListener('input', e=>{ liveNowFilter = e.target.value; paintLiveNowList(); });
 
   // setup
   $('setupBack').addEventListener('click', ()=>go('home'));
@@ -3055,6 +3132,11 @@ async function boot(){
   const configured = await initCloud();
 
   if(configured){
+    // Counts this session toward the admin dashboard's "online now" figure —
+    // works for guests too, since watching live matches never required an
+    // account.
+    joinPresence();
+
     await resumeRedirect();
     onAuth(async (user)=>{
       if(user){

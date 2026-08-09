@@ -445,10 +445,16 @@ async function countAllIn(table){
 }
 
 export async function fetchPlatformStats(){
-  const [tournaments, matches] = await Promise.all([
-    countAllIn('tournaments'), countAllIn('matches')
+  const [tournaments, matches, liveRows] = await Promise.all([
+    countAllIn('tournaments'), countAllIn('matches'), fetchLiveMatchesNow()
   ]);
-  return { tournaments, matches };
+  return {
+    tournaments, matches,
+    liveMatches: liveRows.length,
+    // Distinct tournaments with at least one match currently live — computed
+    // client-side from the same small row set rather than a second query.
+    liveTournaments: new Set(liveRows.map(r=>r.match && r.match.tournamentId).filter(Boolean)).size
+  };
 }
 
 /* ---------------- daily rewards ----------------
@@ -520,7 +526,13 @@ export async function pushLiveNow(match){
 
 async function writeLive(m){
   const { error } = await sb.from('live_matches').upsert({
-    id: m.id, user_id: currentUser.id, data: clean(m), live: true, updated_at: new Date().toISOString()
+    id: m.id, user_id: currentUser.id, data: clean(m), live: true,
+    // Free-text ground/venue the scorer typed at match setup, reused as the
+    // "area" signal for the public Live Now list — no separate location
+    // prompt needed, and it stays consistent with how profiles.location is
+    // deliberately free text rather than a fixed region lookup.
+    location: m.venue || null,
+    updated_at: new Date().toISOString()
   });
   if(error){ console.error('live write failed:', error); return false; }
   return true;
@@ -530,6 +542,76 @@ export async function stopLive(matchId){
   if(!ready || !currentUser || !matchId) return;
   const { error } = await sb.from('live_matches').delete().eq('id', matchId);
   if(error) console.error('stopLive failed:', error);
+}
+
+/* ---------------- live now: public "what's on" browse list ---------------- */
+
+/* Every currently-live match, most recently updated first. Public read (same
+   RLS policy live.html already relies on) — no account needed to browse. */
+export async function fetchLiveMatchesNow(){
+  if(!ready) return [];
+  const { data, error } = await sb.from('live_matches')
+    .select('id, data, location, updated_at')
+    .order('updated_at', { ascending: false });
+  if(error){ console.error('fetchLiveMatchesNow failed:', error); return []; }
+  return data.map(r=>({ id: r.id, match: r.data, location: r.location || '', updatedAt: r.updated_at }));
+}
+
+/* Fires `onChange` whenever any match starts, stops, or scores a ball, so the
+   Live Now screen can just re-fetch and re-render — the row counts involved
+   are small enough that a full re-fetch on each change is simpler and safer
+   than hand-diffing, and matches the re-fetch-on-event pattern used
+   elsewhere in this file. Returns an unsubscribe function. */
+export function watchAllLiveMatches(onChange){
+  if(!ready) return ()=>{};
+  const channel = sb.channel('all_live_matches')
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'live_matches' }, onChange)
+    .subscribe();
+  return ()=>sb.removeChannel(channel);
+}
+
+/* ---------------- presence: how many people currently have the app open ----------------
+   Uses Supabase Realtime Presence, not a database table — membership is
+   ephemeral and tied to the websocket connection, so it needs no schema and
+   self-cleans the instant a tab/app closes. Every client (signed in or
+   guest) that calls joinPresence() is counted; the admin dashboard reads the
+   same shared channel's state rather than running its own separate one. */
+let presenceChannel = null;
+let presenceListeners = [];
+
+function guestPresenceKey(){
+  return 'guest-' + Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
+}
+
+function ensurePresenceChannel(){
+  if(!ready) return null;
+  if(presenceChannel) return presenceChannel;
+  const key = (currentUser && currentUser.id) || guestPresenceKey();
+  presenceChannel = sb.channel('online-users', { config: { presence: { key } } });
+  presenceChannel.on('presence', { event: 'sync' }, ()=>{
+    const count = Object.keys(presenceChannel.presenceState()).length;
+    presenceListeners.forEach(fn=>fn(count));
+  });
+  presenceChannel.subscribe(async (status)=>{
+    if(status === 'SUBSCRIBED') await presenceChannel.track({ online_at: new Date().toISOString() });
+  });
+  return presenceChannel;
+}
+
+/* Call once at boot (any user, signed in or guest) so this session counts
+   toward the platform's online total. */
+export function joinPresence(){
+  ensurePresenceChannel();
+}
+
+/* Admin dashboard: cb(count) immediately with what's currently known, then
+   again every time someone joins or leaves. Returns an unsubscribe function. */
+export function subscribeOnlineCount(cb){
+  const ch = ensurePresenceChannel();
+  if(!ch){ cb(0); return ()=>{}; }
+  presenceListeners.push(cb);
+  cb(Object.keys(ch.presenceState()).length);
+  return ()=>{ presenceListeners = presenceListeners.filter(fn=>fn !== cb); };
 }
 
 export async function watchLiveMatch(matchId, onUpdate, onError){

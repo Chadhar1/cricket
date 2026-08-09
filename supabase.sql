@@ -568,6 +568,16 @@ alter table public.tournaments add column if not exists status       text not nu
   check (status in ('upcoming','live','completed','cancelled'));
 
 -- ---------------------------------------------------------------------------
+-- Live Now (public "what's on" list, browsable by area) + admin live-activity
+-- tiles. `location` is the free-text ground/venue the scorer already types
+-- at match setup — reused as-is, not a new required field. Additive column,
+-- default null, existing rows unaffected. No RLS change needed: the existing
+-- "anyone can read a live match" / owner-write policies on live_matches
+-- already cover it, since RLS is row-level not column-level.
+-- ---------------------------------------------------------------------------
+alter table public.live_matches add column if not exists location text;
+
+-- ---------------------------------------------------------------------------
 -- Bootstrap: run this yourself once, after you've signed up in the app, to
 -- become the first admin. Replace with your actual auth user id.
 -- ---------------------------------------------------------------------------
