@@ -578,6 +578,116 @@ alter table public.tournaments add column if not exists status       text not nu
 alter table public.live_matches add column if not exists location text;
 
 -- ---------------------------------------------------------------------------
+-- feedback — authenticated users only, admin-reviewed. Deliberately no
+-- public read: this is internal product feedback, not a public review —
+-- Play Store ratings/reviews are a separate, later, public-facing feature
+-- and don't touch this table at all.
+-- ---------------------------------------------------------------------------
+create table if not exists public.feedback (
+  id            uuid primary key default gen_random_uuid(),
+  user_id       uuid not null references auth.users(id) on delete cascade,
+  feedback_type text not null default 'other'
+    check (feedback_type in ('bug','feature','suggestion','ux','tournament_match','other')),
+  rating        smallint check (rating is null or rating between 1 and 5),
+  message       text not null check (char_length(message) between 1 and 2000),
+  page          text not null default '',   -- best-effort: which screen they were on
+  app_version   text not null default '',
+  status        text not null default 'new' check (status in ('new','reviewed','resolved')),
+  created_at    timestamptz not null default now(),
+  reviewed_at   timestamptz,
+  reviewed_by   uuid references auth.users(id)
+);
+
+alter table public.feedback enable row level security;
+
+create policy "user can submit their own feedback"
+  on public.feedback for insert
+  with check (user_id = auth.uid());
+
+-- Users can see their own past submissions (not required by the brief, but
+-- costs nothing and enables a future "your feedback" view with no schema
+-- change); admins can see everyone's. Nobody but admin can ever read
+-- another user's feedback.
+create policy "user can read own feedback, admin can read all"
+  on public.feedback for select
+  using (user_id = auth.uid() or public.is_admin());
+
+-- Only admin can change status/reviewed_* — a submitter can never edit or
+-- withdraw their own feedback after sending it (matches "permanent record"
+-- treatment used elsewhere, e.g. organiser_applications).
+create policy "only admin can update feedback"
+  on public.feedback for update
+  using (public.is_admin())
+  with check (public.is_admin());
+
+-- No delete policy on any role — feedback is a permanent record.
+
+-- ---------------------------------------------------------------------------
+-- Admin moderation of tournaments/matches. Neither table gives admins a
+-- write path via RLS — the shared matches/teams/tournaments/events loop
+-- above only grants "owner has full access" + "admin can read all rows"
+-- (select-only). Cancellation goes through a narrow SECURITY DEFINER
+-- function instead of a broad admin-write RLS policy, the same pattern this
+-- file already uses for daily_check_in() and approve_organiser_application():
+-- it can only ever flip a status flag, never touch the rest of the row, and
+-- it re-checks is_admin() itself rather than trusting the caller.
+-- ---------------------------------------------------------------------------
+create or replace function public.admin_cancel_tournament(p_id text)
+returns boolean
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  if not public.is_admin() then
+    raise exception 'not authorized';
+  end if;
+  update public.tournaments
+    set status = 'cancelled', updated_at = now()
+    where id = p_id;
+  return found;
+end;
+$$;
+
+-- Matches have no real `status` column — match state lives entirely in the
+-- jsonb `data` column that engine.js reads/writes. A single additive
+-- `cancelled` flag is enough for admin moderation without reshaping the
+-- engine's match object or touching engine.js at all; app.js checks this
+-- flag alongside the existing `match.completed` check before allowing any
+-- scoring action.
+alter table public.matches add column if not exists cancelled boolean not null default false;
+
+create or replace function public.admin_cancel_match(p_id text)
+returns boolean
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  did_update boolean;
+begin
+  if not public.is_admin() then
+    raise exception 'not authorized';
+  end if;
+  update public.matches
+    set cancelled = true, updated_at = now()
+    where id = p_id;
+  -- Capture FOUND right after the UPDATE — it gets silently overwritten by
+  -- the DELETE below (FOUND reflects whichever statement ran most recently
+  -- in PL/pgSQL), and most matches never had a live_matches row to begin
+  -- with, so returning the post-DELETE FOUND would report "not found" on
+  -- almost every successful cancellation.
+  did_update := found;
+  -- A cancelled match shouldn't keep broadcasting as if still in progress —
+  -- stop any active live share immediately (this is why it's a function and
+  -- not a plain admin UPDATE policy: one call, two tables, one authorization
+  -- check, both effects atomic).
+  delete from public.live_matches where id = p_id;
+  return did_update;
+end;
+$$;
+
+-- ---------------------------------------------------------------------------
 -- Bootstrap: run this yourself once, after you've signed up in the app, to
 -- become the first admin. Replace with your actual auth user id.
 -- ---------------------------------------------------------------------------

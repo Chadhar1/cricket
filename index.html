@@ -70,6 +70,11 @@
   <div class="auth-wrap">
     <div class="auth-hero" id="authHero"></div>
 
+    <div class="card hidden" id="authGateNotice" style="border-color:var(--gold-soft);">
+      <div style="font-weight:700;">Sign in required</div>
+      <div class="stat-dim" id="authGateText" style="margin-top:4px;"></div>
+    </div>
+
     <div class="seg">
       <button id="segSignIn" class="active">Sign in</button>
       <button id="segSignUp">Create account</button>
@@ -408,6 +413,11 @@
     <div class="topbar-actions">
       <button class="icon-btn" id="liveHomeBtn">Home</button>
     </div>
+  </div>
+
+  <div class="card hidden" id="liveCancelledBanner" style="border-color:var(--danger, #c0392b);">
+    <div style="font-weight:700;">This match was cancelled by an administrator</div>
+    <div class="stat-dim" style="margin-top:4px;">Scoring is locked. The record is kept — nothing was deleted.</div>
   </div>
 
   <div class="scoreboard">
@@ -767,15 +777,18 @@
     </button>
   </div>
 
-  <div class="card">
-    <h2>Data</h2>
-    <div class="stat-dim">Matches, teams and tournaments are stored on this device, and synced to your account when signed in.</div>
-    <button class="action-row-btn" id="exportDataBtn">
-      <span class="arb-ico"><svg viewBox="0 0 24 24"><path d="M12 3v12M7 11l5 5 5-5"/><path d="M5 20h14"/></svg></span>
-      <span class="arb-txt"><span class="arb-t">Export all data</span>
-        <span class="arb-s">Download everything as a JSON backup</span></span>
+  <div class="card hidden" id="feedbackCard">
+    <h2>Feedback</h2>
+    <button class="action-row-btn" id="goFeedbackBtn">
+      <span class="arb-ico"><svg viewBox="0 0 24 24"><path d="M4 4h16v12H8l-4 4V4z"/></svg></span>
+      <span class="arb-txt"><span class="arb-t">Feedback</span>
+        <span class="arb-s">Tell us what you think about Cricket Connect</span></span>
       <span class="arb-go">&rsaquo;</span>
     </button>
+  </div>
+
+  <div class="card">
+    <h2>Data</h2>
     <a href="./privacy.html" class="action-row-btn" style="text-decoration:none;">
       <span class="arb-ico"><svg viewBox="0 0 24 24"><path d="M12 3l8 4v5c0 5-3.4 8.5-8 10-4.6-1.5-8-5-8-10V7z"/></svg></span>
       <span class="arb-txt"><span class="arb-t">Privacy policy</span>
@@ -828,6 +841,54 @@
       <h2>Your friends</h2>
       <div id="friendsList"></div>
     </div>
+  </div>
+</div>
+
+<!-- ============================== FEEDBACK ============================== -->
+<div id="screen-feedback" class="hidden">
+  <button class="back-link" id="feedbackBack">&lsaquo; Account</button>
+  <div class="topbar" style="padding-top:0;">
+    <div class="brand">
+      <span class="brand-mark" data-brandmark></span>
+      <span class="brand-text">
+        <span class="brand-name">Cricket <b>Connect</b></span>
+        <span class="brand-sub">FEEDBACK</span>
+      </span>
+    </div>
+  </div>
+
+  <div id="feedbackForm">
+    <div class="card">
+      <div class="stat-dim">Tell us what you think about Cricket Connect — bugs, ideas, or anything
+        that felt off. We read every one of these.</div>
+    </div>
+
+    <div class="card">
+      <label>Feedback type</label>
+      <select id="fbType">
+        <option value="bug">Bug report</option>
+        <option value="feature">Feature request</option>
+        <option value="suggestion">Suggestion</option>
+        <option value="ux">User experience</option>
+        <option value="tournament_match">Tournament / match issue</option>
+        <option value="other">Other</option>
+      </select>
+
+      <label style="margin-top:14px;">Rating</label>
+      <div class="stat-dim" style="margin:-2px 0 8px;">How's Cricket Connect working for you overall?</div>
+      <div id="fbStars" style="font-size:28px;letter-spacing:4px;cursor:pointer;line-height:1;"></div>
+
+      <label style="margin-top:14px;">Your feedback</label>
+      <textarea id="fbMessage" rows="5" maxlength="2000" placeholder="Tell us what you think&hellip;"></textarea>
+
+      <button class="btn" id="fbSubmitBtn" style="margin-top:14px;">Send Feedback</button>
+    </div>
+  </div>
+
+  <div class="card hidden" id="feedbackDone">
+    <h2>Thank you for your feedback!</h2>
+    <div class="stat-dim">Your feedback helps us improve Cricket Connect.</div>
+    <button class="btn secondary" id="fbAnotherBtn" style="margin-top:14px;">Send more feedback</button>
   </div>
 </div>
 
@@ -913,16 +974,105 @@
     <div class="stat-box"><div class="sv" id="adminStatLiveMatches">0</div><div class="sl">Live matches</div></div>
   </div>
 
-  <div class="card">
-    <h2>Organiser requests</h2>
-    <div class="stat-dim" style="margin-bottom:6px;">Players who've applied to run their own tournaments. Approving grants them the organiser badge on their profile.</div>
-    <div id="adminAppsList"></div>
+  <div class="pill-row" id="adminTabs">
+    <button class="pill active" data-atab="overview">Overview</button>
+    <button class="pill" data-atab="tournaments">Tournaments</button>
+    <button class="pill" data-atab="matches">Matches</button>
+    <button class="pill" data-atab="organisers">Organisers</button>
+    <button class="pill" data-atab="users">Users</button>
+    <button class="pill" data-atab="feedback">Feedback</button>
+    <button class="pill" data-atab="activity">Activity</button>
   </div>
 
-  <div class="card">
-    <h2>All tournaments</h2>
-    <div class="stat-dim" style="margin-bottom:6px;">Every tournament on the platform, not just yours — this is what "Tournaments" above counts too.</div>
+  <!-- Overview -->
+  <div id="adminTabOverview">
+    <div class="card">
+      <h2>Needs attention</h2>
+      <div id="adminAttentionList"></div>
+    </div>
+  </div>
+
+  <!-- Tournaments -->
+  <div id="adminTabTournaments" class="hidden">
+    <div class="card">
+      <input type="text" id="adminTourSearch" placeholder="Search by name&hellip;" style="margin-bottom:8px;">
+      <div class="row">
+        <select id="adminTourStatusFilter">
+          <option value="">All statuses</option>
+          <option value="upcoming">Upcoming</option>
+          <option value="live">Live</option>
+          <option value="completed">Completed</option>
+          <option value="cancelled">Cancelled</option>
+        </select>
+        <input type="text" id="adminTourLocationFilter" placeholder="Filter by location&hellip;">
+      </div>
+    </div>
     <div id="adminToursList"></div>
+  </div>
+
+  <!-- Matches -->
+  <div id="adminTabMatches" class="hidden">
+    <div class="card">
+      <div class="pill-row" id="adminMatchFilters" style="margin:0;">
+        <button class="pill active" data-mf="all">All</button>
+        <button class="pill" data-mf="upcoming">Upcoming</button>
+        <button class="pill" data-mf="live">Live</button>
+        <button class="pill" data-mf="completed">Completed</button>
+        <button class="pill" data-mf="cancelled">Cancelled</button>
+      </div>
+    </div>
+    <div id="adminMatchesList"></div>
+  </div>
+
+  <!-- Organisers -->
+  <div id="adminTabOrganisers" class="hidden">
+    <div class="card">
+      <h2>Pending applications</h2>
+      <div class="stat-dim" style="margin-bottom:6px;">Players who've applied to run their own tournaments.</div>
+      <div id="adminAppsList"></div>
+    </div>
+    <div class="card">
+      <h2>Approved organisers</h2>
+      <div id="adminOrganisersList"></div>
+    </div>
+  </div>
+
+  <!-- Users -->
+  <div id="adminTabUsers" class="hidden">
+    <div class="card">
+      <input type="text" id="adminUserSearch" placeholder="Search by name or @handle&hellip;">
+    </div>
+    <div id="adminUsersList"></div>
+  </div>
+
+  <!-- Feedback -->
+  <div id="adminTabFeedback" class="hidden">
+    <div class="card">
+      <div class="pill-row" id="adminFeedbackFilters" style="margin:0 0 8px;">
+        <button class="pill active" data-ff="all">All</button>
+        <button class="pill" data-ff="new">New</button>
+        <button class="pill" data-ff="reviewed">Reviewed</button>
+        <button class="pill" data-ff="resolved">Resolved</button>
+      </div>
+      <select id="adminFeedbackTypeFilter">
+        <option value="">All types</option>
+        <option value="bug">Bug report</option>
+        <option value="feature">Feature request</option>
+        <option value="suggestion">Suggestion</option>
+        <option value="ux">User experience</option>
+        <option value="tournament_match">Tournament / match issue</option>
+        <option value="other">Other</option>
+      </select>
+    </div>
+    <div id="adminFeedbackList"></div>
+  </div>
+
+  <!-- Activity -->
+  <div id="adminTabActivity" class="hidden">
+    <div class="card">
+      <div class="stat-dim">Recently created and recently reviewed items across the platform, most recent first.</div>
+    </div>
+    <div id="adminActivityList"></div>
   </div>
 </div>
 

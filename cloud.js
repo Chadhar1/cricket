@@ -273,7 +273,21 @@ async function deleteRowIn(table, id){
 
 /* matches */
 export const saveMatchToCloud  = (m)=>saveRowIn('matches', m);
-export const fetchCloudMatches = ()=>fetchAllIn('matches');
+
+/* Not fetchAllIn('matches') — that only selects `data`, which would silently
+   drop the real `cancelled` column an admin may have set (see
+   admin_cancel_match in supabase.sql), and the owner's own device would
+   never find out their match was cancelled. Folding it onto the returned
+   object as a plain `cancelled` property means app.js's existing
+   `match.completed` scoring guards just need one extra check. */
+export async function fetchCloudMatches(){
+  if(!ready || !currentUser) return [];
+  const { data, error } = await sb.from('matches').select('data, cancelled')
+    .eq('user_id', currentUser.id).limit(200);
+  if(error){ console.error('fetch matches failed:', error); return []; }
+  return data.map(r=>({ ...r.data, cancelled: !!r.cancelled }));
+}
+
 export const deleteCloudMatch  = (id)=>deleteRowIn('matches', id);
 
 /* teams */
@@ -500,6 +514,107 @@ export async function rejectOrganiserApplication(appId, note){
   if(!ready || !currentUser) return false;
   const { error } = await sb.rpc('reject_organiser_application', { app_id: appId, note: note || '' });
   if(error){ console.error('rejectOrganiserApplication failed:', error); return false; }
+  return true;
+}
+
+/* Admin: grant or revoke organiser access on an existing account. Reuses the
+   existing "owner can update own profile, admin can update any" RLS policy
+   on profiles — that policy's WITH CHECK already lets an admin caller change
+   is_organiser freely (see supabase.sql), so this needs no new migration. */
+export async function adminSetOrganiserStatus(uid, isOrganiser){
+  if(!ready || !currentUser) return false;
+  const { error } = await sb.from('profiles').update({ is_organiser: !!isOrganiser }).eq('id', uid);
+  if(error){ console.error('adminSetOrganiserStatus failed:', error); return false; }
+  return true;
+}
+
+/* ---------------- admin: tournament / match / user management ----------------
+   Richer than fetchPlatformTournaments()/countAllIn() above — these carry the
+   owner id (for the "by organiser" filter) and, for matches, the moderation
+   flag, neither of which live inside the jsonb `data` blob. Same RLS path:
+   "admin can read all rows" on tournaments/matches, silently empty for
+   anyone who isn't actually an admin. */
+
+export async function fetchAllTournamentsAdmin(max = 300){
+  if(!ready) return [];
+  const { data, error } = await sb.from('tournaments')
+    .select('id, user_id, data, updated_at').order('updated_at', { ascending: false }).limit(max);
+  if(error){ console.error('fetchAllTournamentsAdmin failed:', error); return []; }
+  return data.map(r=>({ id: r.id, ownerId: r.user_id, tournament: r.data, updatedAt: r.updated_at }));
+}
+
+export async function fetchAllMatchesAdmin(max = 500){
+  if(!ready) return [];
+  const { data, error } = await sb.from('matches')
+    .select('id, user_id, data, cancelled, updated_at').order('updated_at', { ascending: false }).limit(max);
+  if(error){ console.error('fetchAllMatchesAdmin failed:', error); return []; }
+  return data.map(r=>({
+    id: r.id, ownerId: r.user_id, cancelled: !!r.cancelled, updatedAt: r.updated_at,
+    match: { ...r.data, cancelled: !!r.cancelled }
+  }));
+}
+
+/* Every profile on the platform, for the admin Users/Players list. Same
+   "profiles are readable by any signed-in user" policy every authenticated
+   user already relies on elsewhere (friend search, public profiles) — not a
+   new access grant, just a wider read of an already-broadly-readable table. */
+export async function fetchAllProfilesAdmin(max = 500){
+  if(!ready) return [];
+  const { data, error } = await sb.from('profiles')
+    .select('id, handle, display_name, avatar_id, is_organiser, is_admin, country, region, updated_at')
+    .order('updated_at', { ascending: false }).limit(max);
+  if(error){ console.error('fetchAllProfilesAdmin failed:', error); return []; }
+  return data;
+}
+
+/* Cancel — never delete. Both route through narrow SECURITY DEFINER
+   functions that re-check is_admin() server-side themselves (see
+   supabase.sql) rather than an admin-write RLS policy, so a bug here can
+   never widen into "admin can edit the rest of someone's tournament/match". */
+export async function adminCancelTournament(tournamentId){
+  if(!ready || !currentUser) return false;
+  const { data, error } = await sb.rpc('admin_cancel_tournament', { p_id: tournamentId });
+  if(error){ console.error('adminCancelTournament failed:', error); return false; }
+  return !!data;
+}
+
+export async function adminCancelMatch(matchId){
+  if(!ready || !currentUser) return false;
+  const { data, error } = await sb.rpc('admin_cancel_match', { p_id: matchId });
+  if(error){ console.error('adminCancelMatch failed:', error); return false; }
+  return !!data;
+}
+
+/* ---------------- feedback ---------------- */
+
+export async function submitFeedback({ feedbackType, rating, message, page, appVersion }){
+  if(!ready || !currentUser) return false;
+  const { error } = await sb.from('feedback').insert({
+    user_id: currentUser.id,
+    feedback_type: feedbackType || 'other',
+    rating: rating || null,
+    message: (message || '').trim(),
+    page: page || '',
+    app_version: appVersion || ''
+  });
+  if(error){ console.error('submitFeedback failed:', error); return false; }
+  return true;
+}
+
+export async function fetchAllFeedback(max = 300){
+  if(!ready) return [];
+  const { data, error } = await sb.from('feedback')
+    .select('*').order('created_at', { ascending: false }).limit(max);
+  if(error){ console.error('fetchAllFeedback failed:', error); return []; }
+  return data;
+}
+
+export async function updateFeedbackStatus(feedbackId, status){
+  if(!ready || !currentUser) return false;
+  const { error } = await sb.from('feedback').update({
+    status, reviewed_at: new Date().toISOString(), reviewed_by: currentUser.id
+  }).eq('id', feedbackId);
+  if(error){ console.error('updateFeedbackStatus failed:', error); return false; }
   return true;
 }
 

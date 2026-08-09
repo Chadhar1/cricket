@@ -47,7 +47,10 @@ import {
   approveOrganiserApplication, rejectOrganiserApplication,
   fetchPlatformStats, fetchPlatformTournaments, dailyCheckIn, fetchPublicTournaments,
   fetchTournamentById,
-  fetchLiveMatchesNow, watchAllLiveMatches, joinPresence, subscribeOnlineCount
+  fetchLiveMatchesNow, watchAllLiveMatches, joinPresence, subscribeOnlineCount,
+  submitFeedback, fetchAllFeedback, updateFeedbackStatus,
+  fetchAllTournamentsAdmin, fetchAllMatchesAdmin, fetchAllProfilesAdmin,
+  adminCancelTournament, adminCancelMatch, adminSetOrganiserStatus
 } from './cloud.js';
 
 import {
@@ -73,6 +76,7 @@ let profile = { displayName:'', avatarId:DEFAULT_AVATAR };
 let editingTeamId = null, teamFormRoster = [];
 let pendingExtra = null;
 let authMode = 'signin';
+let authGateReason = null;   // e.g. "access live scoring" — why render() bounced here
 let authAvatar = DEFAULT_AVATAR;
 let openTourId = null, tourTab = 'overview';
 let viewedTournamentPublic = null;   // non-owned tournament fetched for read-only viewing
@@ -89,7 +93,17 @@ let myConnections = [];
 let friendResults = [];
 let profileCache = {};
 let pendingApps = [];
-let adminOverview = { organisers:0, tournaments:0, matches:0, tournamentsList:[], liveMatches:0, liveTournaments:0 };
+let adminOverview = { organisers:0, tournaments:0, matches:0, liveMatches:0, liveTournaments:0 };
+let adminTab = 'overview';
+let adminMatchFilter = 'all';
+let adminFeedbackFilter = 'all';
+let adminFeedbackTypeFilter = '';
+let adminTourSearch = '', adminTourStatusFilter = '', adminTourLocationFilter = '';
+let adminUserSearch = '';
+let adminTournamentsAll = [];   // [{ id, ownerId, tournament, updatedAt }]
+let adminMatchesAll = [];       // [{ id, ownerId, match, cancelled, updatedAt }]
+let adminProfilesAll = [];      // raw profile rows
+let adminFeedbackAll = [];      // raw feedback rows
 let liveNowMatches = [];      // [{ id, match, location, updatedAt }] — currently-live, all users
 let liveNowFilter = '';
 let liveNowUnsub = null;      // realtime unsubscribe for the Live Now screen
@@ -171,7 +185,7 @@ function isSignedIn(){ return cloudReady() && !!getUser(); }
 function requiresAccount(){ return cloudReady(); }
 
 /* ---------------- navigation ---------------- */
-const SCREENS = ['auth','home','setup','live','result','history','teams','tournaments','tournament','stats','profile','friends','admin','player','live-now'];
+const SCREENS = ['auth','home','setup','live','result','history','teams','tournaments','tournament','stats','profile','friends','admin','player','live-now','feedback'];
 const TAB_OF = { home:'home', tournaments:'tournaments', tournament:'tournaments',
                  teams:'teams', stats:'profile', history:'history', profile:'profile',
                  friends:'friends', admin:'admin', 'live-now':'live-now' };
@@ -245,6 +259,13 @@ function renderSidebarAccount(){
 }
 
 function renderAuth(){
+  const notice = $('authGateNotice');
+  if(authGateReason){
+    notice.classList.remove('hidden');
+    $('authGateText').textContent = 'Please sign in to ' + authGateReason + '.';
+  } else {
+    notice.classList.add('hidden');
+  }
   $('authHero').innerHTML = brandLockup(80);
   $('authAvatarGrid').innerHTML = AVATARS.map(a=>
     `<div class="avatar-opt ${a.id === authAvatar ? 'sel':''}" data-avatar="${a.id}">${avatarSVG(a.id, 46)}</div>`).join('');
@@ -442,6 +463,7 @@ function renderProfile(){
     applyBtn.onclick = openApplyOrganiserModal;
   }
   $('goAdminBtn').classList.toggle('hidden', !isAdminUser);
+  $('feedbackCard').classList.toggle('hidden', !isSignedIn());
 
   const who = $('authWho'), btn = $('authActionBtn');
   if(!cloudReady()){
@@ -643,11 +665,22 @@ async function runDailyCheckIn(){
   renderHome(); renderProfile();
 }
 
+/* Admin authorization note: every action below (cancel tournament/cancel
+   match/approve-reject organiser/set organiser status/review feedback) is
+   also independently enforced server-side — either by a SECURITY DEFINER
+   function that re-checks is_admin() itself (admin_cancel_tournament,
+   admin_cancel_match, approve/reject_organiser_application) or by an RLS
+   policy scoped to public.is_admin() (profiles update, feedback update,
+   admin read-all on tournaments/matches/teams/events). isAdminUser here is a
+   UI convenience for what to show — it is never the actual security
+   boundary. A non-admin calling any of these directly gets rejected by the
+   database, not just a hidden button. */
+
 async function refreshAdminData(){
   if(!isAdminUser) return;
-  const [apps, orgCount, platformStats, platformTours] = await Promise.all([
-    fetchPendingOrganiserApplications(), countOrganisers(),
-    fetchPlatformStats(), fetchPlatformTournaments()
+  const [apps, orgCount, platformStats, tours, matchesAdmin, profilesAdmin, feedbackAll] = await Promise.all([
+    fetchPendingOrganiserApplications(), countOrganisers(), fetchPlatformStats(),
+    fetchAllTournamentsAdmin(), fetchAllMatchesAdmin(), fetchAllProfilesAdmin(), fetchAllFeedback()
   ]);
   pendingApps = apps;
   adminOverview.organisers = orgCount;
@@ -655,8 +688,14 @@ async function refreshAdminData(){
   adminOverview.matches = platformStats.matches;
   adminOverview.liveMatches = platformStats.liveMatches;
   adminOverview.liveTournaments = platformStats.liveTournaments;
-  adminOverview.tournamentsList = platformTours;
-  await resolveProfiles(pendingApps.map(a=>a.uid));
+  adminTournamentsAll = tours;
+  adminMatchesAll = matchesAdmin;
+  adminProfilesAll = profilesAdmin;
+  adminFeedbackAll = feedbackAll;
+  await resolveProfiles([
+    ...pendingApps.map(a=>a.uid),
+    ...tours.map(t=>t.ownerId), ...matchesAdmin.map(m=>m.ownerId), ...feedbackAll.map(f=>f.user_id)
+  ]);
 }
 
 function renderAdmin(){
@@ -675,6 +714,106 @@ function renderAdmin(){
     onlineUnsub = subscribeOnlineCount(count=>{ $('adminStatOnline').textContent = count; });
   }
 
+  ['overview','tournaments','matches','organisers','users','feedback','activity'].forEach(x=>
+    $('adminTab' + x[0].toUpperCase() + x.slice(1)).classList.toggle('hidden', x !== adminTab));
+  document.querySelectorAll('#adminTabs .pill').forEach(p=>p.classList.toggle('active', p.dataset.atab === adminTab));
+
+  if(adminTab === 'overview') renderAdminOverview();
+  else if(adminTab === 'tournaments') renderAdminTournaments();
+  else if(adminTab === 'matches') renderAdminMatches();
+  else if(adminTab === 'organisers') renderAdminOrganisers();
+  else if(adminTab === 'users') renderAdminUsers();
+  else if(adminTab === 'feedback') renderAdminFeedback();
+  else if(adminTab === 'activity') renderAdminActivity();
+}
+
+function renderAdminOverview(){
+  const items = [];
+  if(pendingApps.length) items.push({
+    text: pendingApps.length + ' organiser application' + (pendingApps.length===1?'':'s') + ' awaiting review',
+    go: ()=>{ adminTab = 'organisers'; renderAdmin(); }
+  });
+  const newFeedback = adminFeedbackAll.filter(f=>f.status === 'new').length;
+  if(newFeedback) items.push({
+    text: newFeedback + ' new feedback submission' + (newFeedback===1?'':'s'),
+    go: ()=>{ adminTab = 'feedback'; renderAdmin(); }
+  });
+  if(adminOverview.liveMatches) items.push({
+    text: adminOverview.liveMatches + ' match' + (adminOverview.liveMatches===1?'':'es') + ' live right now',
+    go: ()=>{ adminTab = 'matches'; adminMatchFilter = 'live'; renderAdmin(); }
+  });
+  $('adminAttentionList').innerHTML = items.length
+    ? items.map((it,i)=>`<div class="list-pick" data-attn="${i}"><div class="lp-n">${esc(it.text)}</div><span class="arb-go">&rsaquo;</span></div>`).join('')
+    : '<div class="empty-note">Nothing needs attention right now.</div>';
+  document.querySelectorAll('#adminAttentionList [data-attn]').forEach(el=>
+    el.addEventListener('click', ()=>items[+el.dataset.attn].go()));
+}
+
+function tournamentOwnerLabel(ownerId){
+  const p = profileCache[ownerId];
+  return p ? (p.displayName || 'Player') + (p.handle ? ' (@' + p.handle + ')' : '') : 'Unknown';
+}
+
+function renderAdminTournaments(){
+  const q = adminTourSearch.trim().toLowerCase();
+  const rows = adminTournamentsAll.filter(r=>{
+    const t = r.tournament || {};
+    if(q && !(t.name || '').toLowerCase().includes(q)) return false;
+    if(adminTourStatusFilter && t.status !== adminTourStatusFilter) return false;
+    if(adminTourLocationFilter.trim() && !(t.location || '').toLowerCase().includes(adminTourLocationFilter.trim().toLowerCase())) return false;
+    return true;
+  });
+  $('adminToursList').innerHTML = rows.length ? rows.map(r=>{
+    const t = r.tournament || {};
+    const cancelled = t.status === 'cancelled';
+    return `<div class="card" style="margin-bottom:8px;">
+      <div style="display:flex;justify-content:space-between;gap:8px;align-items:flex-start;">
+        <div class="lp-n">
+          <div class="batter-name">${esc(t.name || 'Untitled tournament')}</div>
+          <div class="stat-dim">Organiser: ${esc(tournamentOwnerLabel(r.ownerId))}</div>
+          <div class="stat-dim">${(t.teams||[]).length} teams${t.location ? ' &middot; ' + esc(t.location) : ''}</div>
+        </div>
+        ${statusBadgeHTML(t.status || 'upcoming')}
+      </div>
+      <div style="display:flex;gap:6px;margin-top:10px;">
+        <button class="icon-btn" data-action="admin-view-tournament" data-id="${esc(r.id)}">View</button>
+        ${!cancelled ? `<button class="icon-btn" data-action="admin-cancel-tournament" data-id="${esc(r.id)}" data-name="${esc(t.name||'this tournament')}">Cancel</button>` : ''}
+      </div>
+    </div>`;
+  }).join('') : '<div class="empty-note">No tournaments match your filters.</div>';
+}
+
+function renderAdminMatches(){
+  document.querySelectorAll('#adminMatchFilters .pill').forEach(p=>p.classList.toggle('active', p.dataset.mf === adminMatchFilter));
+  const rows = adminMatchesAll.filter(r=>{
+    const m = r.match || {};
+    if(adminMatchFilter === 'cancelled') return r.cancelled;
+    if(r.cancelled) return adminMatchFilter === 'all';
+    if(adminMatchFilter === 'live') return !m.completed && m.liveShare;
+    if(adminMatchFilter === 'completed') return !!m.completed;
+    if(adminMatchFilter === 'upcoming') return !m.completed && !m.liveShare;
+    return true;
+  });
+  $('adminMatchesList').innerHTML = rows.length ? rows.map(r=>{
+    const m = r.match || {};
+    const label = r.cancelled ? 'cancelled' : m.completed ? 'completed' : (m.liveShare ? 'live' : 'upcoming');
+    return `<div class="card" style="margin-bottom:8px;">
+      <div style="display:flex;justify-content:space-between;gap:8px;align-items:flex-start;">
+        <div class="lp-n">
+          <div class="batter-name">${esc(m.teamA || 'Team A')} vs ${esc(m.teamB || 'Team B')}</div>
+          <div class="stat-dim">Scorer: ${esc(tournamentOwnerLabel(r.ownerId))}${m.venue ? ' &middot; ' + esc(m.venue) : ''}</div>
+        </div>
+        <span class="badge ${label === 'live' ? 'live' : label === 'cancelled' ? 'cancelled' : label === 'completed' ? 'done' : 'open'}">${label}</span>
+      </div>
+      <div style="display:flex;gap:6px;margin-top:10px;">
+        ${!r.cancelled && !m.completed ? `<button class="icon-btn" data-action="admin-cancel-match" data-id="${esc(r.id)}" data-name="${esc((m.teamA||'Team A')+' vs '+(m.teamB||'Team B'))}">Cancel match</button>` : ''}
+        ${m.liveShare && !r.cancelled ? `<button class="icon-btn" data-action="admin-stop-live" data-id="${esc(r.id)}">Stop live scoring</button>` : ''}
+      </div>
+    </div>`;
+  }).join('') : '<div class="empty-note">No matches match this filter.</div>';
+}
+
+function renderAdminOrganisers(){
   $('adminAppsList').innerHTML = pendingApps.length ? pendingApps.map(a=>{
     const p = profileCache[a.uid] || {};
     return `<div class="list-pick" style="align-items:flex-start;">
@@ -691,10 +830,79 @@ function renderAdmin(){
     </div>`;
   }).join('') : '<div class="empty-note">No pending requests.</div>';
 
-  const platformTours = adminOverview.tournamentsList || [];
-  $('adminToursList').innerHTML = platformTours.length
-    ? platformTours.map(t=>`<div class="hist-item"><div class="batter-name">${esc(t.name || 'Untitled tournament')}</div><div class="d">${(t.teams||[]).length} teams</div></div>`).join('')
-    : '<div class="empty-note">No tournaments yet.</div>';
+  const organisers = adminProfilesAll.filter(p=>p.is_organiser);
+  $('adminOrganisersList').innerHTML = organisers.length ? organisers.map(p=>`
+    <div class="list-pick">
+      <div class="lp-n">
+        <div class="batter-name">${esc(p.display_name || 'Player')}${p.handle ? ' &middot; @' + esc(p.handle) : ''}</div>
+        <div class="stat-dim">${adminTournamentsAll.filter(t=>t.ownerId === p.id).length} tournaments</div>
+      </div>
+      <button class="icon-btn" data-action="admin-suspend-organiser" data-id="${esc(p.id)}" data-name="${esc(p.display_name||'this organiser')}">Suspend</button>
+    </div>`).join('') : '<div class="empty-note">No approved organisers yet.</div>';
+}
+
+function renderAdminUsers(){
+  const q = adminUserSearch.trim().toLowerCase();
+  const rows = q ? adminProfilesAll.filter(p=>
+    (p.display_name||'').toLowerCase().includes(q) || (p.handle||'').toLowerCase().includes(q)
+  ) : adminProfilesAll;
+  $('adminUsersList').innerHTML = rows.length ? rows.map(p=>`
+    <div class="list-pick">
+      <div class="lp-n">
+        <div class="batter-name">${esc(p.display_name || 'Player')}${p.handle ? ' &middot; @' + esc(p.handle) : ''}</div>
+        <div class="stat-dim">${[p.is_admin ? 'Admin' : null, p.is_organiser ? 'Organiser' : null].filter(Boolean).join(' &middot; ') || 'Player'}${p.region ? ' &middot; ' + esc(p.region) : ''}</div>
+      </div>
+      <button class="icon-btn" data-action="view-player" data-uid="${esc(p.id)}" data-name="${esc(p.display_name||'')}">View</button>
+    </div>`).join('') : '<div class="empty-note">No users match your search.</div>';
+}
+
+function renderAdminFeedback(){
+  document.querySelectorAll('#adminFeedbackFilters .pill').forEach(p=>p.classList.toggle('active', p.dataset.ff === adminFeedbackFilter));
+  const TYPE_LABEL = { bug:'Bug report', feature:'Feature request', suggestion:'Suggestion', ux:'User experience', tournament_match:'Tournament/match issue', other:'Other' };
+  const rows = adminFeedbackAll.filter(f=>{
+    if(adminFeedbackFilter !== 'all' && f.status !== adminFeedbackFilter) return false;
+    if(adminFeedbackTypeFilter && f.feedback_type !== adminFeedbackTypeFilter) return false;
+    return true;
+  });
+  $('adminFeedbackList').innerHTML = rows.length ? rows.map(f=>{
+    const p = profileCache[f.user_id] || {};
+    const stars = f.rating ? '★'.repeat(f.rating) + '☆'.repeat(5 - f.rating) : 'No rating';
+    return `<div class="card" style="margin-bottom:8px;">
+      <div style="display:flex;justify-content:space-between;gap:8px;align-items:flex-start;">
+        <div class="lp-n">
+          <div class="batter-name">${TYPE_LABEL[f.feedback_type] || 'Other'}</div>
+          <div class="stat-dim">${esc(p.displayName || 'Player')} &middot; ${new Date(f.created_at).toLocaleDateString()} &middot; ${stars}</div>
+        </div>
+        <span class="badge ${f.status === 'new' ? 'live' : f.status === 'resolved' ? 'done' : 'open'}">${f.status}</span>
+      </div>
+      <div style="margin-top:8px;">${esc(f.message)}</div>
+      <div style="display:flex;gap:6px;margin-top:10px;">
+        ${f.status !== 'reviewed' ? `<button class="icon-btn" data-action="admin-review-feedback" data-id="${esc(f.id)}" data-status="reviewed">Mark reviewed</button>` : ''}
+        ${f.status !== 'resolved' ? `<button class="icon-btn on" data-action="admin-review-feedback" data-id="${esc(f.id)}" data-status="resolved">Mark resolved</button>` : ''}
+      </div>
+    </div>`;
+  }).join('') : '<div class="empty-note">No feedback matches this filter.</div>';
+}
+
+function renderAdminActivity(){
+  // Recent-events feed, computed client-side from data already loaded for
+  // the other tabs. Not a persisted audit log — there's no audit_log table
+  // in the schema, so "who did what" for admin actions specifically (as
+  // opposed to "what was created/reviewed and when") isn't tracked yet. See
+  // the Task 8 report for the honest limitation this implies.
+  const events = [];
+  adminTournamentsAll.forEach(r=>events.push({ t: r.updatedAt, text: `Tournament "${r.tournament?.name || 'Untitled'}" updated (${r.tournament?.status || 'upcoming'})` }));
+  adminFeedbackAll.forEach(f=>{
+    events.push({ t: f.created_at, text: `Feedback submitted (${f.feedback_type})` });
+    if(f.reviewed_at) events.push({ t: f.reviewed_at, text: `Feedback marked ${f.status}` });
+  });
+  pendingApps.forEach(a=>events.push({ t: a.createdAt || a.created_at, text: `Organiser application from ${a.orgName}` }));
+  events.sort((a,b)=> new Date(b.t) - new Date(a.t));
+  $('adminActivityList').innerHTML = events.length
+    ? '<div class="card">' + events.slice(0, 60).map(e=>
+        `<div class="hist-item"><div class="d">${e.t ? new Date(e.t).toLocaleString() : ''}</div><div class="batter-name">${esc(e.text)}</div></div>`
+      ).join('') + '</div>'
+    : '<div class="empty-note">No recent activity.</div>';
 }
 
 async function approveApp(id){
@@ -707,6 +915,69 @@ async function rejectApp(id){
   const ok = await rejectOrganiserApplication(id, '');
   if(ok){ toast('Rejected'); pendingApps = pendingApps.filter(a=>a.id !== id); renderAdmin(); }
   else toast('Could not reject — try again');
+}
+
+/* Confirmation is deliberately a distinct, explicitly-labelled button (never
+   a bare "OK") for every destructive admin action below — see Task 8 rules:
+   "make the action difficult to trigger accidentally". */
+function openConfirmModal(title, body, confirmLabel, onConfirm){
+  openModal(`
+    <h3>${esc(title)}</h3>
+    <div class="stat-dim" style="margin:8px 0 16px;">${body}</div>
+    <div style="display:flex;gap:8px;justify-content:flex-end;">
+      <button class="btn secondary" data-action="close">Cancel</button>
+      <button class="btn" id="modalConfirmBtn">${esc(confirmLabel)}</button>
+    </div>
+  `);
+  $('modalConfirmBtn').addEventListener('click', async ()=>{ closeModal(); await onConfirm(); });
+}
+
+function adminCancelTournamentPrompt(id, name){
+  openConfirmModal('Cancel tournament?',
+    `"${esc(name)}" will be marked <b>Cancelled</b> and hidden from active listings. Its matches, teams and
+     historical results are kept exactly as they are — nothing is deleted, and this cannot be undone from here.`,
+    'Yes, cancel this tournament',
+    async ()=>{
+      const ok = await adminCancelTournament(id);
+      if(ok){ toast('Tournament cancelled'); await refreshAdminData(); renderAdmin(); }
+      else toast('Could not cancel — try again');
+    });
+}
+
+function adminCancelMatchPrompt(id, name){
+  openConfirmModal('Cancel match?',
+    `"${esc(name)}" will be marked cancelled and any live share stopped immediately. The match record and its
+     ball-by-ball history are kept, not deleted.`,
+    'Yes, cancel this match',
+    async ()=>{
+      const ok = await adminCancelMatch(id);
+      if(ok){ toast('Match cancelled'); await refreshAdminData(); renderAdmin(); }
+      else toast('Could not cancel — try again');
+    });
+}
+
+async function adminStopLiveAction(id){
+  await stopLive(id);
+  toast('Live scoring stopped');
+  await refreshAdminData(); renderAdmin();
+}
+
+function adminSuspendOrganiserPrompt(uid, name){
+  openConfirmModal('Suspend organiser access?',
+    `${esc(name)} will lose the organiser badge and the ability to create new public tournaments.
+     Tournaments they already created are not affected or deleted.`,
+    'Yes, suspend organiser access',
+    async ()=>{
+      const ok = await adminSetOrganiserStatus(uid, false);
+      if(ok){ toast('Organiser access suspended'); await refreshAdminData(); renderAdmin(); }
+      else toast('Could not update — try again');
+    });
+}
+
+async function adminReviewFeedbackAction(id, status){
+  const ok = await updateFeedbackStatus(id, status);
+  if(ok){ toast('Feedback marked ' + status); await refreshAdminData(); renderAdmin(); }
+  else toast('Could not update — try again');
 }
 
 /* ---------------- HOME ---------------- */
@@ -1537,8 +1808,16 @@ function ballLock(){
   return true;
 }
 
+/* A match an admin has cancelled is locked exactly like a completed one —
+   every scoring entry point (runs, extras, wickets, strike swap) checks
+   this alongside `match.completed`. This only catches it once the flag has
+   actually synced to this device (next load/save, or immediately for an
+   admin themselves) — see adminCancelMatch()'s comment in cloud.js for why
+   a true mid-ball realtime kill-switch isn't implemented. */
+function matchLocked(m){ return !m || m.completed || m.cancelled; }
+
 function doRun(n){
-  if(!match || match.completed || !ballLock()) return;
+  if(matchLocked(match) || !ballLock()) return;
   snapshot();
   afterBall(playBall(match, { extra:null, batRuns:n, isWicket:false }));
 }
@@ -1548,7 +1827,7 @@ function undo(){
   closeModal(); persistMatch(); render();
 }
 function manualSwap(){
-  if(!match || match.completed) return;
+  if(matchLocked(match)) return;
   snapshot(); swapStrike(curInnings(match)); persistMatch(); render();
   toast('Strike swapped');
 }
@@ -1635,7 +1914,7 @@ function openWicketModal(){
 }
 
 function submitWicket(){
-  if(!match || match.completed || !ballLock()) return;
+  if(matchLocked(match) || !ballLock()) return;
   const inn = curInnings(match);
   const last = (inn.wickets + 1) >= inn.allOutWickets;
   const newName = last ? '' : ($('wkNewBatter').value || '').trim();
@@ -1771,6 +2050,7 @@ function startSuperOver(parentId){
 
 /* ---------------- LIVE RENDER ---------------- */
 function renderLive(){
+  $('liveCancelledBanner').classList.toggle('hidden', !match.cancelled);
   const inn = curInnings(match);
   $('liveContext').textContent = match.tournamentId
     ? (tournaments.find(t=>t.id === match.tournamentId)?.name || 'LIVE').toUpperCase() : 'LIVE';
@@ -2250,6 +2530,48 @@ function paintLiveNowList(){
       <div class="stat-dim" style="margin-top:2px;">${r.location ? esc(r.location) : 'Venue not given'}</div>
     </a>`;
   }).join('');
+}
+
+/* ---------------- feedback ---------------- */
+
+let feedbackRating = 0;
+
+function renderFeedback(){
+  $('feedbackForm').classList.remove('hidden');
+  $('feedbackDone').classList.add('hidden');
+  $('fbType').value = 'bug';
+  $('fbMessage').value = '';
+  feedbackRating = 0;
+  paintStars();
+}
+
+function paintStars(){
+  const box = $('fbStars');
+  box.innerHTML = [1,2,3,4,5].map(n=>
+    `<span data-star="${n}" style="color:${n <= feedbackRating ? 'var(--gold-soft)' : 'var(--ink-dim)'};">${n <= feedbackRating ? '★' : '☆'}</span>`
+  ).join('');
+}
+
+async function submitFeedbackForm(){
+  if(!isSignedIn()){ go('feedback'); return; }  // render() will bounce to auth with the reason
+  const message = $('fbMessage').value.trim();
+  if(!message){ toast('Tell us a little about what you think first'); return; }
+  const btn = $('fbSubmitBtn');
+  btn.disabled = true; btn.textContent = 'Sending…';
+  const ok = await submitFeedback({
+    feedbackType: $('fbType').value,
+    rating: feedbackRating || null,
+    message,
+    page: 'feedback',
+    appVersion: APP_VERSION
+  });
+  btn.disabled = false; btn.textContent = 'Send Feedback';
+  if(ok){
+    $('feedbackForm').classList.add('hidden');
+    $('feedbackDone').classList.remove('hidden');
+  } else {
+    toast('Could not send feedback — check your connection and try again');
+  }
 }
 
 function renderTournaments(){
@@ -2821,18 +3143,26 @@ function setupConnectivity(){
    by Supabase RLS — so this isn't the real security boundary, just where
    guests stop being asked to sign in for something they're allowed to see. */
 const GATED = {
-  setup:'start scoring', live:'score a match', teams:'build teams',
+  setup:'access live scoring', live:'access live scoring', teams:'build teams',
   tournaments:'run tournaments',
   stats:'see your records', history:'see your match history',
-  friends:'find and add friends', admin:'manage the platform'
+  friends:'find and add friends', admin:'manage the platform',
+  feedback:'leave feedback'
 };
 
 function render(){
   paintBrandMarks();
   renderSidebarAccount();
 
-  /* Anyone without an account is sent to the sign-in screen. */
-  if(requiresAccount() && !isSignedIn() && GATED[screen]){
+  /* Anyone without an account trying to reach a gated screen is sent to the
+     sign-in screen instead, with the reason carried along so renderAuth()
+     can show a specific "sign in to X" message rather than a blank prompt.
+     This is the single choke point every gated screen passes through —
+     there's no separate path into 'setup'/'live' that skips it (see the
+     `?go=` deep-link handling in boot(), which applies the same check
+     before ever setting screen to a gated value). */
+  authGateReason = (requiresAccount() && !isSignedIn() && GATED[screen]) ? GATED[screen] : null;
+  if(authGateReason){
     screen = 'auth';
   }
 
@@ -2852,6 +3182,7 @@ function render(){
     case 'friends': renderFriends(); break;
     case 'player': renderPlayerProfile(); break;
     case 'live-now': renderLiveNow(); break;
+    case 'feedback': renderFeedback(); break;
     case 'admin':
       if(!isAdminUser){ go('home'); return; }
       renderAdmin();
@@ -2989,6 +3320,15 @@ function bind(){
   // tournaments
   $('newTournamentBtn').addEventListener('click', openNewTournamentModal);
   $('tourBack').addEventListener('click', ()=>go('tournaments'));
+  $('feedbackBack').addEventListener('click', ()=>go('profile'));
+  $('fbStars').addEventListener('click', e=>{
+    const s = e.target.closest('[data-star]');
+    if(!s) return;
+    feedbackRating = parseInt(s.dataset.star, 10);
+    paintStars();
+  });
+  $('fbSubmitBtn').addEventListener('click', submitFeedbackForm);
+  $('fbAnotherBtn').addEventListener('click', renderFeedback);
   $('tourMenuBtn').addEventListener('click', ()=>{ tourTab = 'teams'; render(); });
   $('tourShareBtn').addEventListener('click', async ()=>{
     const t = currentTour(); if(!t) return;
@@ -3005,6 +3345,19 @@ function bind(){
   document.querySelectorAll('#screen-tournament .pill').forEach(p=>
     p.addEventListener('click', ()=>{ tourTab = p.dataset.tab; render(); }));
 
+  // admin
+  document.querySelectorAll('#adminTabs .pill').forEach(p=>
+    p.addEventListener('click', ()=>{ adminTab = p.dataset.atab; renderAdmin(); }));
+  document.querySelectorAll('#adminMatchFilters .pill').forEach(p=>
+    p.addEventListener('click', ()=>{ adminMatchFilter = p.dataset.mf; renderAdmin(); }));
+  document.querySelectorAll('#adminFeedbackFilters .pill').forEach(p=>
+    p.addEventListener('click', ()=>{ adminFeedbackFilter = p.dataset.ff; renderAdmin(); }));
+  $('adminTourSearch').addEventListener('input', e=>{ adminTourSearch = e.target.value; renderAdminTournaments(); });
+  $('adminTourStatusFilter').addEventListener('change', e=>{ adminTourStatusFilter = e.target.value; renderAdminTournaments(); });
+  $('adminTourLocationFilter').addEventListener('input', e=>{ adminTourLocationFilter = e.target.value; renderAdminTournaments(); });
+  $('adminUserSearch').addEventListener('input', e=>{ adminUserSearch = e.target.value; renderAdminUsers(); });
+  $('adminFeedbackTypeFilter').addEventListener('change', e=>{ adminFeedbackTypeFilter = e.target.value; renderAdminFeedback(); });
+
   // profile
   $('saveProfileBtn').addEventListener('click', saveProfileForm);
   $('photoUploadBtn').addEventListener('click', ()=>$('photoInput').click());
@@ -3014,7 +3367,10 @@ function bind(){
     if(f) handlePhotoPick(f);
     e.target.value = '';
   });
-  $('exportDataBtn').addEventListener('click', exportData);
+  // Export-as-JSON is intentionally no longer exposed to normal users — the
+  // exportData() function still exists elsewhere in this file in case it's
+  // useful for a future admin/dev tool, it's just not wired to any button.
+  $('goFeedbackBtn').addEventListener('click', ()=>go('feedback'));
   $('viewMyProfileBtn').addEventListener('click', ()=>{
     const u = getUser();
     openPlayerProfile(u ? { uid: u.id, name: displayName() } : { name: displayName() });
@@ -3067,7 +3423,7 @@ function bind(){
     else if(a === 'skip-toss'){ pendingToss = null; closeModal(); startMatch(null); }
     else if(a === 'start-super-over') startSuperOver(el.dataset.id);
     else if(a === 'extra-run'){
-      if(!match || match.completed || !ballLock()) return;
+      if(matchLocked(match) || !ballLock()) return;
       const n = parseInt(el.dataset.n,10); const type = pendingExtra; pendingExtra = null;
       closeModal(); snapshot(); afterBall(playBall(match, { extra:type, batRuns:n, isWicket:false }));
     }
@@ -3114,6 +3470,12 @@ function bind(){
     else if(a === 'approve-app') approveApp(el.dataset.id);
     else if(a === 'reject-app') rejectApp(el.dataset.id);
     else if(a === 'view-player') openPlayerProfile({ uid: el.dataset.uid || null, name: el.dataset.name || null });
+    else if(a === 'admin-view-tournament') openTournamentView(el.dataset.id);
+    else if(a === 'admin-cancel-tournament') adminCancelTournamentPrompt(el.dataset.id, el.dataset.name);
+    else if(a === 'admin-cancel-match') adminCancelMatchPrompt(el.dataset.id, el.dataset.name);
+    else if(a === 'admin-stop-live') adminStopLiveAction(el.dataset.id);
+    else if(a === 'admin-suspend-organiser') adminSuspendOrganiserPrompt(el.dataset.id, el.dataset.name);
+    else if(a === 'admin-review-feedback') adminReviewFeedbackAction(el.dataset.id, el.dataset.status);
   });
 }
 
@@ -3194,9 +3556,13 @@ async function boot(){
     return;
   }
 
-  if(configured && !getUser()) screen = 'auth';
-  else if(deep && allowed.includes(deep)) screen = deep;
-  else screen = 'home';
+  // Don't special-case "not signed in" here by jumping straight to 'auth' —
+  // that used to skip past render()'s own GATED check, so a guest opening a
+  // deep link straight into a gated screen (e.g. ?go=setup) landed on a
+  // blank sign-in screen with no explanation. Set the *intended* screen and
+  // let render()'s single gate check (below, same one every other
+  // navigation already goes through) redirect with the proper reason.
+  screen = (deep && allowed.includes(deep)) ? deep : 'home';
 
   if(deep) history.replaceState({}, '', location.pathname);
   render();
