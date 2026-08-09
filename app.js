@@ -94,6 +94,8 @@ let friendResults = [];
 let profileCache = {};
 let pendingApps = [];
 let adminOverview = { organisers:0, tournaments:0, matches:0, liveMatches:0, liveTournaments:0 };
+let adminLoadError = null;      // set to an Error when the last refreshAdminData() failed
+let adminLoading = false;
 let adminTab = 'overview';
 let adminMatchFilter = 'all';
 let adminFeedbackFilter = 'all';
@@ -104,6 +106,16 @@ let adminTournamentsAll = [];   // [{ id, ownerId, tournament, updatedAt }]
 let adminMatchesAll = [];       // [{ id, ownerId, match, cancelled, updatedAt }]
 let adminProfilesAll = [];      // raw profile rows
 let adminFeedbackAll = [];      // raw feedback rows
+let adminLiveNowById = {};      // id -> { match, location, updatedAt } — from live_matches, the
+                                 // only source with genuine per-ball freshness (see note below)
+let adminLiveUnsub = null;      // realtime teardown, mirrors liveNowUnsub/onlineUnsub
+
+// Stale-live thresholds, in seconds — deliberately named constants, not
+// magic numbers buried in the render function, so they're easy to retune.
+// This is an admin-facing warning only: nothing here ever auto-ends a
+// match, matching the brief ("do not automatically stop a match").
+const STALE_WARN_SECONDS = 90;     // 🟡 no update for a couple of minutes
+const STALE_DANGER_SECONDS = 300;  // 🔴 potentially stale
 let liveNowMatches = [];      // [{ id, match, location, updatedAt }] — currently-live, all users
 let liveNowFilter = '';
 let liveNowUnsub = null;      // realtime unsubscribe for the Live Now screen
@@ -465,6 +477,14 @@ function renderProfile(){
   $('goAdminBtn').classList.toggle('hidden', !isAdminUser);
   $('feedbackCard').classList.toggle('hidden', !isSignedIn());
 
+  // Identity should be unambiguous about elevated access, not just a hidden
+  // "Admin dashboard" button an admin might miss — shown here regardless of
+  // which tab they're on. Ordinary players get no role line at all.
+  const roleLine = $('profileRoleLine');
+  if(isAdminUser){ roleLine.textContent = 'Role: Administrator'; roleLine.classList.remove('hidden'); }
+  else if(isOrganiser){ roleLine.textContent = 'Role: Organiser'; roleLine.classList.remove('hidden'); }
+  else roleLine.classList.add('hidden');
+
   const who = $('authWho'), btn = $('authActionBtn');
   if(!cloudReady()){
     who.innerHTML = '<span class="dot offline"></span>Local only &middot; Supabase not configured';
@@ -678,27 +698,96 @@ async function runDailyCheckIn(){
 
 async function refreshAdminData(){
   if(!isAdminUser) return;
-  const [apps, orgCount, platformStats, tours, matchesAdmin, profilesAdmin, feedbackAll] = await Promise.all([
-    fetchPendingOrganiserApplications(), countOrganisers(), fetchPlatformStats(),
-    fetchAllTournamentsAdmin(), fetchAllMatchesAdmin(), fetchAllProfilesAdmin(), fetchAllFeedback()
-  ]);
-  pendingApps = apps;
-  adminOverview.organisers = orgCount;
-  adminOverview.tournaments = platformStats.tournaments;
-  adminOverview.matches = platformStats.matches;
-  adminOverview.liveMatches = platformStats.liveMatches;
-  adminOverview.liveTournaments = platformStats.liveTournaments;
-  adminTournamentsAll = tours;
-  adminMatchesAll = matchesAdmin;
-  adminProfilesAll = profilesAdmin;
-  adminFeedbackAll = feedbackAll;
-  await resolveProfiles([
-    ...pendingApps.map(a=>a.uid),
-    ...tours.map(t=>t.ownerId), ...matchesAdmin.map(m=>m.ownerId), ...feedbackAll.map(f=>f.user_id)
-  ]);
+  adminLoading = true; adminLoadError = null;
+  try{
+    const [apps, orgCount, platformStats, tours, matchesAdmin, profilesAdmin, feedbackAll, liveNow] = await Promise.all([
+      fetchPendingOrganiserApplications(), countOrganisers(), fetchPlatformStats(),
+      fetchAllTournamentsAdmin(), fetchAllMatchesAdmin(), fetchAllProfilesAdmin(), fetchAllFeedback(),
+      fetchLiveMatchesNow()
+    ]);
+    pendingApps = apps;
+    adminOverview.organisers = orgCount;
+    adminOverview.tournaments = platformStats.tournaments;
+    adminOverview.matches = platformStats.matches;
+    adminOverview.liveMatches = platformStats.liveMatches;
+    adminOverview.liveTournaments = platformStats.liveTournaments;
+    adminTournamentsAll = tours;
+    adminMatchesAll = matchesAdmin;
+    adminProfilesAll = profilesAdmin;
+    adminFeedbackAll = feedbackAll;
+    applyLiveNowSnapshot(liveNow);
+    await resolveProfiles([
+      ...pendingApps.map(a=>a.uid),
+      ...tours.map(t=>t.ownerId), ...matchesAdmin.map(m=>m.ownerId), ...feedbackAll.map(f=>f.user_id)
+    ]);
+  } catch(err){
+    // Deliberately don't clear the previous values on failure — better to
+    // show slightly stale numbers behind a clear "this may be out of date"
+    // banner than to flash everything to 0 and have that read as real data.
+    console.error('refreshAdminData failed:', err);
+    adminLoadError = err;
+  } finally {
+    adminLoading = false;
+  }
+}
+
+/* Keeps adminLiveNowById in sync with the freshest live_matches rows. This is
+   the only source with genuine per-ball freshness — score/wickets/overs on
+   the `matches` table snapshot (adminMatchesAll) is only ever written at
+   innings checkpoints, so a match mid-over would show stale numbers there.
+   Kept as a small side table, keyed by id, rather than merged into
+   adminMatchesAll, so a live_matches realtime tick can update just this
+   without re-fetching the larger matches/tournaments/profiles/feedback
+   tables (per the brief's "avoid unnecessary database requests" note). */
+function applyLiveNowSnapshot(rows){
+  adminLiveNowById = {};
+  rows.forEach(r=>{ adminLiveNowById[r.id] = r; });
+}
+
+async function refreshAdminLiveNow(){
+  if(!isAdminUser) return;
+  try{
+    applyLiveNowSnapshot(await fetchLiveMatchesNow());
+  }catch(err){
+    console.error('refreshAdminLiveNow failed:', err);
+  }
+  if(screen === 'admin' && adminTab === 'matches') renderAdminMatches();
+  if(screen === 'admin' && adminTab === 'overview') renderAdminOverview();
+}
+
+/* "12 seconds ago" / "4 minutes ago" — small and local to admin, since it's
+   only needed for the Live Match Control Center's last-updated line. */
+function timeAgoShort(iso){
+  if(!iso) return 'unknown';
+  const secs = Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 1000));
+  if(secs < 5) return 'just now';
+  if(secs < 60) return secs + ' second' + (secs===1?'':'s') + ' ago';
+  const mins = Math.round(secs / 60);
+  if(mins < 60) return mins + ' minute' + (mins===1?'':'s') + ' ago';
+  const hrs = Math.round(mins / 60);
+  return hrs + ' hour' + (hrs===1?'':'s') + ' ago';
+}
+
+/* Admin warning only — never used to stop or otherwise act on a match, just
+   to flag one for a human to look at. Thresholds are the two named
+   constants near the top of this file; retune there, not here. */
+function staleness(iso){
+  if(!iso) return { cls:'stale-unknown', label:'⚪ No data' };
+  const secs = (Date.now() - new Date(iso).getTime()) / 1000;
+  if(secs < STALE_WARN_SECONDS) return { cls:'stale-ok', label:'🟢 Active' };
+  if(secs < STALE_DANGER_SECONDS) return { cls:'stale-warn', label:'🟡 No update for a few minutes' };
+  return { cls:'stale-danger', label:'🔴 Potentially stale' };
 }
 
 function renderAdmin(){
+  const errBox = $('adminErrorBox');
+  errBox.classList.toggle('hidden', !adminLoadError);
+  if(adminLoadError){
+    $('adminErrorText').textContent = 'Something went wrong talking to the database. Numbers below may be out of date or incomplete.';
+  }
+  $('adminRefreshBtn').disabled = adminLoading;
+  $('adminRefreshBtn').textContent = adminLoading ? 'Refreshing…' : '⟲ Refresh';
+
   $('adminStatPending').textContent = pendingApps.length;
   $('adminStatOrganisers').textContent = adminOverview.organisers;
   $('adminStatTournaments').textContent = adminOverview.tournaments;
@@ -712,6 +801,15 @@ function renderAdmin(){
   if(!onlineUnsub){
     $('adminStatOnline').textContent = '…';
     onlineUnsub = subscribeOnlineCount(count=>{ $('adminStatOnline').textContent = count; });
+  }
+
+  // Live Match Control Center freshness: a dedicated live_matches
+  // subscription so scores/overs update as balls are bowled, without
+  // re-polling the larger matches/tournaments/profiles/feedback tables that
+  // refreshAdminData() covers. Subscribed once per admin visit, torn down
+  // on leaving the admin screen (same pattern as onlineUnsub above).
+  if(!adminLiveUnsub){
+    adminLiveUnsub = watchAllLiveMatches(()=>{ if(screen === 'admin') refreshAdminLiveNow(); });
   }
 
   ['overview','tournaments','matches','organisers','users','feedback','activity'].forEach(x=>
@@ -783,6 +881,8 @@ function renderAdminTournaments(){
   }).join('') : '<div class="empty-note">No tournaments match your filters.</div>';
 }
 
+let adminMatchManageOpen = new Set();  // ids currently showing the Manage panel
+
 function renderAdminMatches(){
   document.querySelectorAll('#adminMatchFilters .pill').forEach(p=>p.classList.toggle('active', p.dataset.mf === adminMatchFilter));
   const rows = adminMatchesAll.filter(r=>{
@@ -794,23 +894,72 @@ function renderAdminMatches(){
     if(adminMatchFilter === 'upcoming') return !m.completed && !m.liveShare;
     return true;
   });
+
   $('adminMatchesList').innerHTML = rows.length ? rows.map(r=>{
-    const m = r.match || {};
-    const label = r.cancelled ? 'cancelled' : m.completed ? 'completed' : (m.liveShare ? 'live' : 'upcoming');
-    return `<div class="card" style="margin-bottom:8px;">
-      <div style="display:flex;justify-content:space-between;gap:8px;align-items:flex-start;">
-        <div class="lp-n">
-          <div class="batter-name">${esc(m.teamA || 'Team A')} vs ${esc(m.teamB || 'Team B')}</div>
-          <div class="stat-dim">Scorer: ${esc(tournamentOwnerLabel(r.ownerId))}${m.venue ? ' &middot; ' + esc(m.venue) : ''}</div>
-        </div>
-        <span class="badge ${label === 'live' ? 'live' : label === 'cancelled' ? 'cancelled' : label === 'completed' ? 'done' : 'open'}">${label}</span>
-      </div>
-      <div style="display:flex;gap:6px;margin-top:10px;">
-        ${!r.cancelled && !m.completed ? `<button class="icon-btn" data-action="admin-cancel-match" data-id="${esc(r.id)}" data-name="${esc((m.teamA||'Team A')+' vs '+(m.teamB||'Team B'))}">Cancel match</button>` : ''}
-        ${m.liveShare && !r.cancelled ? `<button class="icon-btn" data-action="admin-stop-live" data-id="${esc(r.id)}">Stop live scoring</button>` : ''}
-      </div>
-    </div>`;
+    const isLive = !r.cancelled && !r.match?.completed && r.match?.liveShare;
+    return isLive ? renderAdminLiveMatchCard(r) : renderAdminPlainMatchCard(r);
   }).join('') : '<div class="empty-note">No matches match this filter.</div>';
+}
+
+/* The HIGH PRIORITY Live Match Control Center card. Score/wickets/overs and
+   "last updated" come from adminLiveNowById (the live_matches table) when
+   available — that's the only place with genuine per-ball freshness; the
+   `matches` row (r.match) is only a fallback for teams/venue/tournament if
+   the live row hasn't arrived yet (e.g. right after a refresh, before the
+   subscription's first tick). */
+function renderAdminLiveMatchCard(r){
+  const live = adminLiveNowById[r.id];
+  const m = (live && live.match) || r.match || {};
+  const inn = (m.innings && m.innings[m.currentInningsIdx]) || null;
+  const scoreLine = inn ? teamName(m, inn.battingTeam) + ' ' + inn.runs + '/' + inn.wickets : (m.teamA || 'Team A');
+  const oversLine = inn ? fmtOvers(inn.legalBalls) + ' overs' : '';
+  const battingTeam = inn ? teamName(m, inn.battingTeam) : (m.teamA || 'Team A');
+  const otherTeam = inn ? teamName(m, inn.bowlingTeam) : (m.teamB || 'Team B');
+  const tour = m.tournamentId ? adminTournamentsAll.find(t=>t.id === m.tournamentId) : null;
+  const lastUpdatedIso = (live && live.updatedAt) || r.updatedAt;
+  const st = staleness(lastUpdatedIso);
+  const open = adminMatchManageOpen.has(r.id);
+
+  return `<div class="card" style="margin-bottom:8px;border-color:var(--live, #c0392b);">
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;">
+      <span class="pill-live mini">LIVE</span>
+      <span class="stat-dim ${st.cls}" title="Admin warning only — never auto-stops a match">${st.label}</span>
+    </div>
+    <div class="batter-name" style="margin-top:8px;font-size:16px;">${esc(scoreLine)}</div>
+    ${oversLine ? `<div class="stat-dim">${esc(oversLine)}</div>` : ''}
+    <div class="stat-dim" style="margin-top:2px;">vs ${esc(otherTeam)}</div>
+    <div class="stat-dim" style="margin-top:6px;">
+      ${tour ? 'Tournament: ' + esc(tour.tournament?.name || 'Untitled') + '<br>' : ''}
+      ${(m.venue || (live && live.location)) ? 'Ground: ' + esc(m.venue || live.location) + '<br>' : ''}
+      Scorer: ${esc(tournamentOwnerLabel(r.ownerId))}<br>
+      Last updated: ${esc(timeAgoShort(lastUpdatedIso))}
+    </div>
+    <div style="display:flex;gap:6px;margin-top:10px;">
+      <a class="icon-btn" href="./live.html?m=${esc(r.id)}" target="_blank" rel="noopener">View live</a>
+      <button class="icon-btn" data-action="admin-toggle-manage" data-id="${esc(r.id)}">${open ? 'Hide manage' : 'Manage'}</button>
+    </div>
+    ${open ? `<div style="display:flex;gap:6px;margin-top:8px;">
+      <button class="icon-btn" data-action="admin-cancel-match" data-id="${esc(r.id)}" data-name="${esc(battingTeam+' vs '+otherTeam)}">Cancel match</button>
+      <button class="icon-btn" data-action="admin-stop-live" data-id="${esc(r.id)}">Stop live scoring</button>
+    </div>` : ''}
+  </div>`;
+}
+
+function renderAdminPlainMatchCard(r){
+  const m = r.match || {};
+  const label = r.cancelled ? 'cancelled' : m.completed ? 'completed' : 'upcoming';
+  return `<div class="card" style="margin-bottom:8px;">
+    <div style="display:flex;justify-content:space-between;gap:8px;align-items:flex-start;">
+      <div class="lp-n">
+        <div class="batter-name">${esc(m.teamA || 'Team A')} vs ${esc(m.teamB || 'Team B')}</div>
+        <div class="stat-dim">Scorer: ${esc(tournamentOwnerLabel(r.ownerId))}${m.venue ? ' &middot; ' + esc(m.venue) : ''}</div>
+      </div>
+      <span class="badge ${label === 'cancelled' ? 'cancelled' : label === 'completed' ? 'done' : 'open'}">${label}</span>
+    </div>
+    <div style="display:flex;gap:6px;margin-top:10px;">
+      ${!r.cancelled && !m.completed ? `<button class="icon-btn" data-action="admin-cancel-match" data-id="${esc(r.id)}" data-name="${esc((m.teamA||'Team A')+' vs '+(m.teamB||'Team B'))}">Cancel match</button>` : ''}
+    </div>
+  </div>`;
 }
 
 function renderAdminOrganisers(){
@@ -3194,6 +3343,7 @@ function render(){
   // the one showing, so they don't keep running in the background forever.
   if(screen !== 'live-now' && liveNowUnsub){ liveNowUnsub(); liveNowUnsub = null; }
   if(screen !== 'admin' && onlineUnsub){ onlineUnsub(); onlineUnsub = null; }
+  if(screen !== 'admin' && adminLiveUnsub){ adminLiveUnsub(); adminLiveUnsub = null; }
 }
 
 /* ---------------- EVENTS ---------------- */
@@ -3346,6 +3496,8 @@ function bind(){
     p.addEventListener('click', ()=>{ tourTab = p.dataset.tab; render(); }));
 
   // admin
+  $('adminRefreshBtn').addEventListener('click', ()=>refreshAdminData().then(renderAdmin));
+  $('adminRetryBtn').addEventListener('click', ()=>refreshAdminData().then(renderAdmin));
   document.querySelectorAll('#adminTabs .pill').forEach(p=>
     p.addEventListener('click', ()=>{ adminTab = p.dataset.atab; renderAdmin(); }));
   document.querySelectorAll('#adminMatchFilters .pill').forEach(p=>
@@ -3470,6 +3622,11 @@ function bind(){
     else if(a === 'approve-app') approveApp(el.dataset.id);
     else if(a === 'reject-app') rejectApp(el.dataset.id);
     else if(a === 'view-player') openPlayerProfile({ uid: el.dataset.uid || null, name: el.dataset.name || null });
+    else if(a === 'admin-toggle-manage'){
+      const id = el.dataset.id;
+      if(adminMatchManageOpen.has(id)) adminMatchManageOpen.delete(id); else adminMatchManageOpen.add(id);
+      renderAdminMatches();
+    }
     else if(a === 'admin-view-tournament') openTournamentView(el.dataset.id);
     else if(a === 'admin-cancel-tournament') adminCancelTournamentPrompt(el.dataset.id, el.dataset.name);
     else if(a === 'admin-cancel-match') adminCancelMatchPrompt(el.dataset.id, el.dataset.name);

@@ -439,7 +439,7 @@ export async function isCurrentUserAdmin(){
 export async function countOrganisers(){
   if(!ready) return 0;
   const { count, error } = await sb.from('profiles').select('id', { count:'exact', head:true }).eq('is_organiser', true);
-  if(error){ console.error('countOrganisers failed:', error); return 0; }
+  if(error){ console.error('countOrganisers failed:', error); throw error; }
   return count || 0;
 }
 
@@ -449,12 +449,21 @@ export async function countOrganisers(){
    deliberately filter to the signed-in user. These bypass that filter and
    rely on the "admin can read all rows" RLS policy (supabase.sql) instead,
    so they only ever return real data for an actual admin — for anyone else
-   RLS silently returns nothing, same as querying a table you can't see. */
+   RLS silently returns nothing, same as querying a table you can't see.
+
+   Deliberately different error contract from the rest of this file: most
+   functions above quietly return [] / 0 / false on failure so a local-only
+   or flaky-network user never sees a broken screen. These admin-only reads
+   THROW on a real query error instead, because the admin dashboard needs to
+   tell "genuinely zero records" apart from "the request failed" — silently
+   showing 0 pending organisers when the query actually errored would hide a
+   real problem from the one person meant to catch it. app.js's
+   refreshAdminData() catches these and shows a distinct error+retry state. */
 
 async function countAllIn(table){
   if(!ready) return 0;
   const { count, error } = await sb.from(table).select('id', { count:'exact', head:true });
-  if(error){ console.error(`countAllIn ${table} failed:`, error); return 0; }
+  if(error){ console.error(`countAllIn ${table} failed:`, error); throw error; }
   return count || 0;
 }
 
@@ -499,7 +508,7 @@ export async function fetchPlatformTournaments(max = 100){
 export async function fetchPendingOrganiserApplications(){
   if(!ready || !currentUser) return [];
   const { data, error } = await sb.from('organiser_applications').select('*').eq('status', 'pending');
-  if(error){ console.error('fetchPendingOrganiserApplications failed:', error); return []; }
+  if(error){ console.error('fetchPendingOrganiserApplications failed:', error); throw error; }
   return data.map(toAppApplication);
 }
 
@@ -539,7 +548,7 @@ export async function fetchAllTournamentsAdmin(max = 300){
   if(!ready) return [];
   const { data, error } = await sb.from('tournaments')
     .select('id, user_id, data, updated_at').order('updated_at', { ascending: false }).limit(max);
-  if(error){ console.error('fetchAllTournamentsAdmin failed:', error); return []; }
+  if(error){ console.error('fetchAllTournamentsAdmin failed:', error); throw error; }
   return data.map(r=>({ id: r.id, ownerId: r.user_id, tournament: r.data, updatedAt: r.updated_at }));
 }
 
@@ -547,7 +556,7 @@ export async function fetchAllMatchesAdmin(max = 500){
   if(!ready) return [];
   const { data, error } = await sb.from('matches')
     .select('id, user_id, data, cancelled, updated_at').order('updated_at', { ascending: false }).limit(max);
-  if(error){ console.error('fetchAllMatchesAdmin failed:', error); return []; }
+  if(error){ console.error('fetchAllMatchesAdmin failed:', error); throw error; }
   return data.map(r=>({
     id: r.id, ownerId: r.user_id, cancelled: !!r.cancelled, updatedAt: r.updated_at,
     match: { ...r.data, cancelled: !!r.cancelled }
@@ -563,7 +572,7 @@ export async function fetchAllProfilesAdmin(max = 500){
   const { data, error } = await sb.from('profiles')
     .select('id, handle, display_name, avatar_id, is_organiser, is_admin, country, region, updated_at')
     .order('updated_at', { ascending: false }).limit(max);
-  if(error){ console.error('fetchAllProfilesAdmin failed:', error); return []; }
+  if(error){ console.error('fetchAllProfilesAdmin failed:', error); throw error; }
   return data;
 }
 
@@ -605,7 +614,7 @@ export async function fetchAllFeedback(max = 300){
   if(!ready) return [];
   const { data, error } = await sb.from('feedback')
     .select('*').order('created_at', { ascending: false }).limit(max);
-  if(error){ console.error('fetchAllFeedback failed:', error); return []; }
+  if(error){ console.error('fetchAllFeedback failed:', error); throw error; }
   return data;
 }
 

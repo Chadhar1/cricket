@@ -183,6 +183,8 @@ input:focus, textarea:focus, select:focus{
 .batter-name{font-weight:600;}
 .batter-name.on-strike::after{content:" *"; color:var(--gold-soft);}
 .stat-dim{color:var(--ink-dim); font-size:12px;}
+.stat-dim.stale-warn{color:#d4a017;}
+.stat-dim.stale-danger{color:var(--live);}
 
 .toggle-line{display:flex; align-items:center; justify-content:space-between; gap:12px;}
 .switch{position:relative; display:inline-block; width:44px; height:26px; flex:none;}

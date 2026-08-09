@@ -674,6 +674,7 @@
     <div class="avatar-big-wrap" id="profileAvatarBig" style="margin-bottom:10px;"></div>
     <div style="font-size:18px;font-weight:700;" id="profileName">Guest</div>
     <div class="stat-dim" id="profileEmail">Not signed in</div>
+    <div class="stat-dim hidden" id="profileRoleLine" style="margin-top:2px;font-weight:600;color:var(--gold-soft);">Role: Administrator</div>
     <div class="stat-strip hidden" id="profileRewardsStrip" style="margin-top:12px;">
       <div class="stat-box"><div class="sv" id="profilePoints">0</div><div class="sl">Points</div></div>
       <div class="stat-box"><div class="sv" id="profileStreak">0</div><div class="sl">Day streak</div></div>
@@ -958,6 +959,15 @@
         <span class="brand-sub">ADMIN</span>
       </span>
     </div>
+    <div class="topbar-actions">
+      <button class="icon-btn" id="adminRefreshBtn" title="Refresh">&#8635; Refresh</button>
+    </div>
+  </div>
+
+  <div class="card hidden" id="adminErrorBox" style="border-color:var(--danger, #c0392b);">
+    <div style="font-weight:700;">Unable to load admin data</div>
+    <div class="stat-dim" id="adminErrorText" style="margin-top:4px;">Something went wrong talking to the database. Numbers below may be out of date or incomplete.</div>
+    <button class="btn secondary" id="adminRetryBtn" style="margin-top:10px;">Try again</button>
   </div>
 
   <div class="stat-strip">
