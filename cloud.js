@@ -355,6 +355,29 @@ export async function fetchPublicTournaments(max = 30){
   return data.map(r=>r.data);
 }
 
+/* Points-based "Top Players" rail for the home dashboard. Points come from
+   the existing daily-check-in/streak system (profiles.points) — the app has
+   no skill/performance rating engine, so this shows real points rather than
+   inventing a rating, per "don't fake statistics". Only players who've set a
+   public username (handle) are eligible, matching how public profiles work
+   everywhere else. Relies on the existing "profiles are readable by any
+   signed-in user" RLS policy other reads already lean on — no schema change,
+   and guests get an empty list rather than a leaked query. */
+export async function fetchTopPlayers(limit = 8){
+  if(!ready || !currentUser) return [];
+  const { data, error } = await sb.from('profiles')
+    .select('id, handle, display_name, avatar_id, photo, points, is_organiser, region')
+    .not('handle', 'is', null)
+    .order('points', { ascending: false })
+    .limit(limit);
+  if(error){ console.error('fetchTopPlayers failed:', error); return []; }
+  return data.map(r=>({
+    uid: r.id, handle: r.handle, displayName: r.display_name || 'Player',
+    avatarId: r.avatar_id, photo: r.photo || undefined, points: r.points || 0,
+    isOrganiser: r.is_organiser, region: r.region || ''
+  }));
+}
+
 /* scheduled events */
 export const saveEvent   = (e)=>saveRowIn('events', e);
 export const fetchEvents = ()=>fetchAllIn('events');

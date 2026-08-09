@@ -5,7 +5,7 @@
 <title>Player Profile — Cricket Connect</title>
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="description" content="A player's digital cricket CV on Cricket Connect — real stats, teams and tournaments.">
-<meta name="theme-color" content="#060b14">
+<meta name="theme-color" content="#0D1B2A">
 <link rel="apple-touch-icon" href="./icon-180.png">
 <link rel="icon" href="./icon-192.png">
 <link rel="stylesheet" href="./styles.css">
@@ -47,9 +47,6 @@
           <div class="player-role-row" id="pvRoleRow"></div>
           <div class="player-loc stat-dim" id="pvLoc"></div>
         </div>
-      </div>
-      <div class="player-rating-chip">
-        <span class="prc-star">&#9733;</span><span>Rating — coming soon</span>
       </div>
     </div>
 
@@ -109,7 +106,7 @@ function render(p){
     : p.avatarId ? avatarSVG(p.avatarId, 76) : initialsBadge(p.displayName || p.handle, 76);
   $('pvName').textContent = p.displayName || ('@' + p.handle);
   $('pvRoleRow').innerHTML = [
-    p.isOrganiser ? '<span class="role-badge organiser">Organiser</span>' : '',
+    p.isOrganiser ? '<span class="role-badge organiser">&#10003; Organiser</span>' : '',
     '<span class="stat-dim">@' + esc(p.handle) + '</span>'
   ].filter(Boolean).join(' ');
   const loc = [p.district || p.area, p.country].filter(Boolean).join(', ');

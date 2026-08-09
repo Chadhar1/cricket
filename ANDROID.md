@@ -61,7 +61,7 @@ Accept the defaults, except:
 - **Application ID**: `app.vercel.cricket_pied_ten.twa`
   (must match `package_name` in `assetlinks.json`)
 - **Display mode**: `standalone`
-- **Status bar colour**: `#060b14` (must match `--bg-0` in `styles.css` and `theme_color` in `manifest.json`, or the native splash/status bar will visibly flash a different shade than the app on launch)
+- **Status bar colour**: `#0D1B2A` (must match `--bg-0` in `styles.css` and `theme_color` in `manifest.json`, or the native splash/status bar will visibly flash a different shade than the app on launch)
 
 It creates a signing key. **Back that keystore up somewhere safe.** Lose it and you can
 never update the app on Play again — you'd have to publish under a new listing and every
@@ -216,4 +216,4 @@ already handles this — "Continue without an account" works offline — but men
 the review notes so they know to try it.
 
 **Splash screen flashes white**
-Confirm `backgroundColor` is `#060b14` in `twa-manifest.json` and rebuild.
+Confirm `backgroundColor` is `#0D1B2A` in `twa-manifest.json` and rebuild.

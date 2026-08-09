@@ -50,7 +50,8 @@ import {
   fetchLiveMatchesNow, watchAllLiveMatches, joinPresence, subscribeOnlineCount,
   submitFeedback, fetchAllFeedback, updateFeedbackStatus,
   fetchAllTournamentsAdmin, fetchAllMatchesAdmin, fetchAllProfilesAdmin,
-  adminCancelTournament, adminCancelMatch, adminSetOrganiserStatus
+  adminCancelTournament, adminCancelMatch, adminSetOrganiserStatus,
+  fetchTopPlayers
 } from './cloud.js';
 
 import {
@@ -1326,7 +1327,8 @@ function playerIdentity(){
       handle: myPublicProfile && myPublicProfile.handle,
       avatar: avatarHTML(84),
       isOrganiser: !!(myPublicProfile && myPublicProfile.isOrganiser),
-      location: [profile.district || profile.area, profile.country].filter(Boolean).join(', ')
+      location: [profile.district || profile.area, profile.country].filter(Boolean).join(', '),
+      points: myPublicProfile ? (myPublicProfile.points || 0) : null
     };
   }
   return {
@@ -1334,7 +1336,12 @@ function playerIdentity(){
     handle: pub && pub.handle,
     avatar: pub ? avatarHTMLFor(pub, 84) : initialsBadge(vp.name, 84),
     isOrganiser: !!(pub && pub.isOrganiser),
-    location: pub ? [pub.district || pub.area, pub.country].filter(Boolean).join(', ') : ''
+    location: pub ? [pub.district || pub.area, pub.country].filter(Boolean).join(', ') : '',
+    // pub is only populated for a signed-in viewer (fetchPublicProfile) —
+    // points intentionally stay unknown (not zero) for a guest viewer or a
+    // player only known by a scored-match name, so the UI can tell "no
+    // points yet" apart from "we don't actually know".
+    points: pub ? (pub.points || 0) : null
   };
 }
 
@@ -1357,11 +1364,20 @@ function renderPlayerProfile(){
 
   $('playerRoleRow').innerHTML = [
     role ? `<span class="role-badge">${esc(role)}</span>` : '',
-    id.isOrganiser ? `<span class="role-badge organiser">Organiser</span>` : '',
+    // "Organiser" doubles as this app's verification signal — it's the one
+    // status here that's actually vetted (admin-approved application), so
+    // it gets a checkmark rather than inventing a separate verified flag.
+    id.isOrganiser ? `<span class="role-badge organiser">&#10003; Organiser</span>` : '',
     id.handle ? `<span class="stat-dim">@${esc(id.handle)}</span>` : ''
   ].filter(Boolean).join(' ');
   $('playerLocEl').textContent = id.location || (fmt ? 'Mostly plays ' + fmt : '');
-  $('playerRatingVal').textContent = 'Rating — coming soon';
+  const ratingChip = $('playerRatingVal').closest('.player-rating-chip');
+  if(id.points === null){
+    ratingChip.classList.add('hidden');
+  } else {
+    ratingChip.classList.remove('hidden');
+    $('playerRatingVal').textContent = id.points + (id.points === 1 ? ' point' : ' points');
+  }
 
   $('playerStatStrip').innerHTML = [
     { v: career ? career.matches : 0, l:'Matches' },
@@ -1569,7 +1585,9 @@ function renderHome(){
   renderNextMatch();
   renderMyStats();
   renderAchievements();
-  renderRecommendedTournaments();
+  renderHomeLiveMatches();
+  renderUpcomingTournaments();
+  renderHomeTopPlayers();
   $('homeGuestCta').classList.toggle('hidden', !!u);
 }
 
@@ -1592,29 +1610,149 @@ function renderHomeTournaments(){
     b.addEventListener('click', ()=>go('tournaments')));
 }
 
-async function renderRecommendedTournaments(){
-  const box = $('recommendedTourBox');
+const TOUR_FORMAT_LABEL = { 'league-knockout':'League + knockouts', 'league':'League table', 'knockout':'Knockout' };
+
+/* "Upcoming Tournaments" — public tournaments other organisers marked
+   public (fetchPublicTournaments, existing RLS-backed read, no schema
+   change). Card shows every field the brief asks for: name, status, date,
+   location, format, team count. Was "Recommended Tournaments" lower on the
+   page; moved up + renamed to match the new home priority (what's
+   happening in cricket right now), same data source. */
+async function renderUpcomingTournaments(){
+  const box = $('homeUpcomingTourBox');
   if(!box) return;
   if(!cloudReady()){
-    box.innerHTML = `<div class="stat-dim">Public tournament discovery needs the cloud connection. In local-only mode there's no way to see other organisers' tournaments.</div>`;
+    box.innerHTML = `<div class="empty-note">Tournament discovery needs the cloud connection. In local-only mode there's no way to see other organisers' tournaments.</div>`;
     return;
   }
   box.innerHTML = `<div class="stat-dim">Loading…</div>`;
   let list = [];
+  let failed = false;
   try{ list = await fetchPublicTournaments(6); }
-  catch(e){ console.error('renderRecommendedTournaments failed:', e); }
+  catch(e){ console.error('renderUpcomingTournaments failed:', e); failed = true; }
   if(!box.isConnected) return; // screen changed while awaiting
-  if(!list.length){
-    box.innerHTML = `<div class="stat-dim">No public tournaments yet. When an organiser marks one public, it'll show up here.</div>`;
+  if(failed){
+    box.innerHTML = `<div class="empty-note">Couldn't load tournaments right now.
+      <button class="btn secondary small" data-retry>Try again</button></div>`;
+    box.querySelector('[data-retry]').addEventListener('click', renderUpcomingTournaments);
     return;
   }
-  box.innerHTML = `<div class="mini-rail">` +
-    list.map(t=>`
-      <button class="mini-card" data-action="open-tour" data-id="${esc(t.id)}">
-        <div class="mc-t">${esc(t.name)}</div>
-        <div class="mc-s">${(t.teams || []).length} team${(t.teams || []).length === 1 ? '' : 's'}${t.format ? ' · ' + esc(t.format) : ''}</div>
-      </button>`).join('') +
-    `</div>`;
+  if(!list.length){
+    box.innerHTML = `<div class="empty-note">No tournaments found nearby yet.<br>
+      When an organiser marks one public, it'll show up here.
+      <button class="btn secondary small" data-action="open-new-tournament">Start one yourself</button></div>`;
+    return;
+  }
+  box.innerHTML = list.map(t=>`
+    <button class="tour-card" data-action="open-tour" data-id="${esc(t.id)}" style="width:100%;text-align:left;font-family:inherit;">
+      ${initialsBadge(t.name, 40)}
+      <div class="tc-b">
+        <div class="tc-n">${esc(t.name)}</div>
+        <div class="tc-m">${fmtDateRange(t.startDate, t.endDate) || 'Date TBC'}${t.location ? ' &middot; ' + esc(t.location) : ''}</div>
+        <div class="tc-m">${TOUR_FORMAT_LABEL[t.format] || 'League'} &middot; ${(t.teams || []).length} team${(t.teams || []).length === 1 ? '' : 's'}</div>
+      </div>
+      ${statusBadgeHTML(t.status || 'upcoming')}
+    </button>`).join('');
+}
+
+/* "Live Matches" — the home screen's top-priority section per the brief
+   ("what's happening in cricket right now"). Real data via
+   fetchLiveMatchesNow(), the same read the public Live Now screen and the
+   admin Live Match Control Center already use — no new query, no fake
+   scores. Shows both teams' scores where known ("Yet to bat" otherwise),
+   current overs, and the venue/area, matching the brief's example layout. */
+function inningsForTeam(m, key){
+  return (m.innings || []).find(i=>i.battingTeam === key) || null;
+}
+function homeLiveCardHTML(r){
+  const m = r.match || {};
+  const scoreFor = key=>{
+    const inn = inningsForTeam(m, key);
+    return inn ? (inn.runs + '/' + inn.wickets) : 'Yet to bat';
+  };
+  const cur = (m.innings && m.innings[m.currentInningsIdx]) || null;
+  const oversNote = cur ? fmtOvers(cur.legalBalls) + ' overs' : '';
+  return `<a class="live-card" href="./live.html?m=${esc(r.id)}" target="_blank" rel="noopener">
+    <div class="lc-top">
+      <span class="lc-comp">${esc(r.location || 'Live match')}</span>
+      <span class="badge-live"><i></i>LIVE</span>
+    </div>
+    <div class="lc-teams">
+      <div class="lc-side"><div class="lcs-n">${esc(m.teamA || 'Team A')}</div><div class="lcs-s">${esc(scoreFor('A'))}</div></div>
+      <div class="lc-vs">VS</div>
+      <div class="lc-side"><div class="lcs-n">${esc(m.teamB || 'Team B')}</div><div class="lcs-s">${esc(scoreFor('B'))}</div></div>
+    </div>
+    ${oversNote ? `<div class="lc-note">${esc(oversNote)}</div>` : ''}
+  </a>`;
+}
+async function renderHomeLiveMatches(){
+  const box = $('homeLiveRail');
+  if(!box) return;
+  if(!cloudReady()){
+    box.innerHTML = `<div class="empty-note">Live match discovery needs the cloud connection.</div>`;
+    return;
+  }
+  box.innerHTML = `<div class="stat-dim">Loading…</div>`;
+  let rows = [];
+  let failed = false;
+  try{ rows = await fetchLiveMatchesNow(); }
+  catch(e){ console.error('renderHomeLiveMatches failed:', e); failed = true; }
+  if(!box.isConnected) return;
+  if(failed){
+    box.innerHTML = `<div class="empty-note">Couldn't load live matches right now.
+      <button class="btn secondary small" data-retry>Try again</button></div>`;
+    box.querySelector('[data-retry]').addEventListener('click', renderHomeLiveMatches);
+    return;
+  }
+  if(!rows.length){
+    box.innerHTML = `<div class="empty-note">No live matches right now.<br>
+      Start one yourself and turn on <b>Share Live</b> during setup.</div>`;
+    return;
+  }
+  box.innerHTML = `<div class="live-rail">` + rows.slice(0, 6).map(homeLiveCardHTML).join('') + `</div>`;
+}
+
+/* "Top Players" — real points-leaderboard rail (see cloud.js
+   fetchTopPlayers; no invented "rating"). Signed-out visitors get an
+   explicit sign-in prompt rather than a silently empty section, since
+   points are only readable once signed in (existing RLS/privacy pattern —
+   see fetchPublicPlayerCard's comment on why points stay out of the fully
+   anonymous read path). */
+async function renderHomeTopPlayers(){
+  const box = $('homeTopPlayersRail');
+  if(!box) return;
+  if(!isSignedIn()){
+    box.innerHTML = `<div class="empty-note">Sign in to see top players by points.
+      <button class="btn secondary small" data-action="go-auth">Sign in</button></div>`;
+    return;
+  }
+  if(!cloudReady()){
+    box.innerHTML = `<div class="empty-note">Top players needs the cloud connection.</div>`;
+    return;
+  }
+  box.innerHTML = `<div class="stat-dim">Loading…</div>`;
+  let rows = [];
+  let failed = false;
+  try{ rows = await fetchTopPlayers(10); }
+  catch(e){ console.error('renderHomeTopPlayers failed:', e); failed = true; }
+  if(!box.isConnected) return;
+  if(failed){
+    box.innerHTML = `<div class="empty-note">Couldn't load top players right now.
+      <button class="btn secondary small" data-retry>Try again</button></div>`;
+    box.querySelector('[data-retry]').addEventListener('click', renderHomeTopPlayers);
+    return;
+  }
+  if(!rows.length){
+    box.innerHTML = `<div class="empty-note">No ranked players yet.<br>Open the app daily to start earning points.</div>`;
+    return;
+  }
+  box.innerHTML = `<div class="player-rail">` + rows.map(p=>`
+    <button class="player-card" data-action="view-player" data-uid="${esc(p.uid)}" data-name="${esc(p.displayName)}">
+      <div class="pc-av">${avatarHTMLFor(p, 56)}</div>
+      <div class="pc-n">${esc(p.displayName)}</div>
+      <div class="rating-star">&#9733; ${esc(p.points)} pts</div>
+      <div class="pc-l">${p.isOrganiser ? 'Organiser' : (p.region || 'Player')}</div>
+    </button>`).join('') + `</div>`;
 }
 
 function renderHomeTeams(){
@@ -2558,11 +2696,11 @@ function renderTeams(){
   const list = $('teamsList');
   list.innerHTML = teams.length ? teams.map(t=>`
     <div class="hist-item">
-      <div style="display:flex;align-items:center;gap:10px;min-width:0;">
+      <div style="display:flex;align-items:center;gap:10px;min-width:0;cursor:pointer;" data-action="view-team" data-id="${esc(t.id)}">
         ${initialsBadge(t.name, 34)}
         <div style="min-width:0;">
           <div class="batter-name">${esc(t.name)}</div>
-          <div class="d">${(t.players||[]).length} player${(t.players||[]).length===1?'':'s'}</div>
+          <div class="d">${(t.players||[]).length} player${(t.players||[]).length===1?'':'s'}${t.captain ? ' &middot; Captain: ' + esc(t.captain) : ''}</div>
         </div>
       </div>
       <div style="display:flex;gap:6px;flex-shrink:0;">
@@ -2577,6 +2715,11 @@ function renderRoster(){
   $('teamFormRoster').innerHTML = teamFormRoster.length
     ? teamFormRoster.map((p,i)=>`<span class="roster-chip">${esc(p)}<button data-action="rm-player" data-i="${i}">&times;</button></span>`).join('')
     : '<div class="stat-dim">No players added yet.</div>';
+  const capSel = $('teamFormCaptain');
+  const prev = capSel.value;
+  capSel.innerHTML = '<option value="">No captain set</option>' +
+    teamFormRoster.map(p=>`<option value="${esc(p)}">${esc(p)}</option>`).join('');
+  capSel.value = teamFormRoster.includes(prev) ? prev : '';
 }
 function addPlayer(){
   const inp = $('teamFormPlayer'); const n = inp.value.trim();
@@ -2587,7 +2730,8 @@ function addPlayer(){
 async function saveTeamForm(){
   const name = $('teamFormName').value.trim();
   if(!name){ toast('Enter a team name'); return; }
-  const team = { id: editingTeamId || makeId(), name, players:[...teamFormRoster], updatedAt: Date.now() };
+  const captain = $('teamFormCaptain').value || null;
+  const team = { id: editingTeamId || makeId(), name, players:[...teamFormRoster], captain, updatedAt: Date.now() };
   const i = teams.findIndex(t=>t.id === team.id);
   if(i >= 0) teams[i] = team; else teams.push(team);
   saveTeams();
@@ -2599,6 +2743,7 @@ function clearTeamForm(){
   $('teamFormName').value = ''; $('teamFormPlayer').value = '';
   $('teamFormTitle').textContent = 'Add Team';
   renderRoster();
+  $('teamFormCaptain').value = '';
 }
 function editTeam(id){
   const t = teams.find(x=>x.id === id); if(!t) return;
@@ -2606,7 +2751,45 @@ function editTeam(id){
   $('teamFormName').value = t.name;
   $('teamFormTitle').textContent = 'Edit Team';
   renderRoster();
+  $('teamFormCaptain').value = t.captain || '';
   $('teamFormName').scrollIntoView({ behavior:'smooth', block:'center' });
+}
+
+/* Team detail — a modal rather than a new full screen/route, to keep this
+   addition low-risk (no changes to SCREENS/TAB_OF/GATED routing). Record
+   and tournament participation are real, computed from the same
+   allCompletedMatches()/tournaments data every other stats screen already
+   uses — nothing invented, no captain-less team gets a fake one. */
+function openTeamDetailModal(id){
+  const t = teams.find(x=>x.id === id); if(!t) return;
+  const rec = teamRecords(allCompletedMatches()).find(r=>normName(r.name) === normName(t.name));
+  const myTours = tournamentsForTeams(tournaments, [t.name]);
+  const roster = t.players || [];
+  openModal(`
+    <div style="display:flex;align-items:center;gap:12px;margin-bottom:16px;">
+      ${initialsBadge(t.name, 56)}
+      <div style="min-width:0;">
+        <div class="batter-name" style="font-size:17px;">${esc(t.name)}</div>
+        ${t.captain ? `<div class="stat-dim">Captain: ${esc(t.captain)}</div>` : ''}
+      </div>
+    </div>
+    <div class="stat-strip">
+      <div class="stat-box"><div class="sv">${rec ? rec.played : 0}</div><div class="sl">Played</div></div>
+      <div class="stat-box"><div class="sv">${rec ? rec.won : 0}</div><div class="sl">Won</div></div>
+      <div class="stat-box"><div class="sv">${rec ? rec.lost : 0}</div><div class="sl">Lost</div></div>
+      <div class="stat-box"><div class="sv">${rec ? rec.winPct : 0}%</div><div class="sl">Win rate</div></div>
+    </div>
+    <h3 style="margin:16px 0 8px;font-size:14px;color:var(--gold-soft);">Squad (${roster.length})</h3>
+    <div>${roster.length ? roster.map(p=>
+      `<span class="roster-chip">${initialsBadge(p, 18)} ${esc(p)}${t.captain === p ? ' <b>(C)</b>' : ''}</span>`
+    ).join('') : '<div class="empty-note">No players added yet.</div>'}</div>
+    ${myTours.length ? `<h3 style="margin:16px 0 8px;font-size:14px;color:var(--gold-soft);">Tournaments</h3>
+      <div class="kv-list">${myTours.map(x=>`<div class="kv-row"><div class="kv-k">${esc(x.name)}</div><div class="kv-v">${statusBadgeHTML(deriveStatus(x, x.status))}</div></div>`).join('')}</div>` : ''}
+    <div style="display:flex;gap:8px;margin-top:16px;">
+      <button class="btn secondary" data-action="close">Close</button>
+      <button class="btn" data-action="edit-team-from-modal" data-id="${esc(t.id)}">Edit team</button>
+    </div>
+  `);
 }
 async function removeTeam(id){
   teams = teams.filter(t=>t.id !== id); saveTeams();
@@ -2740,7 +2923,7 @@ function renderTournaments(){
       ${initialsBadge(t.name, 40)}
       <div class="tc-b">
         <div class="tc-n">${esc(t.name)}</div>
-        <div class="tc-m">${t.teams.length} teams · ${done}/${fx.length} played · ${t.oversLimit} ov</div>
+        <div class="tc-m">${TOUR_FORMAT_LABEL[t.format] || 'League'} &middot; ${t.teams.length} teams &middot; ${done}/${fx.length} played</div>
         ${metaLine ? `<div class="tc-m">${esc(metaLine)}</div>` : ''}
         <div style="margin-top:6px;">${statusBadgeHTML(status)}${champ ? ` <span class="badge done">🏆 ${esc(champ.name)}</span>` : ''}</div>
       </div>
@@ -3383,9 +3566,17 @@ function bind(){
   $('qaNewMatch').addEventListener('click', ()=>{ setupPrefill = null; go('setup'); });
   $('heroFindTournaments').addEventListener('click', ()=>go('tournaments'));
   $('heroFindPlayers').addEventListener('click', ()=>go('friends'));
-  $('heroCreateTournament').addEventListener('click', ()=>go('tournaments'));
+  // Previously identical to "Explore Tournaments" (both just opened the list) —
+  // this one now actually opens the create-tournament flow once the auth gate
+  // (tournaments is a GATED screen) has let the user through.
+  $('heroCreateTournament').addEventListener('click', ()=>{
+    go('tournaments');
+    if(isSignedIn()) openNewTournamentModal();
+  });
   $('homeFindPlayersBtn').addEventListener('click', ()=>go('friends'));
   $('homeTournamentsSeeAll').addEventListener('click', ()=>go('tournaments'));
+  $('homeLiveSeeAll').addEventListener('click', ()=>go('live-now'));
+  $('homeUpcomingTourSeeAll').addEventListener('click', ()=>go('tournaments'));
   $('homeTeamsSeeAll').addEventListener('click', ()=>go('teams'));
   $('homeStatsSeeAll').addEventListener('click', ()=>go('stats'));
   $('homeCtaSignIn').addEventListener('click', ()=>go('auth'));
@@ -3585,12 +3776,15 @@ function bind(){
     else if(a === 'confirm-end-innings'){ closeModal(); handleInningsEnd(); }
     else if(a === 'view-history'){ historyViewId = el.dataset.id; go('result'); }
     else if(a === 'edit-team') editTeam(el.dataset.id);
+    else if(a === 'view-team') openTeamDetailModal(el.dataset.id);
+    else if(a === 'edit-team-from-modal'){ closeModal(); editTeam(el.dataset.id); }
     else if(a === 'del-team') removeTeam(el.dataset.id);
     else if(a === 'rm-player'){ teamFormRoster.splice(parseInt(el.dataset.i,10),1); renderRoster(); }
     else if(a === 'save-event') saveEventForm();
     else if(a === 'del-event') removeEvent(el.dataset.id);
     else if(a === 'start-event') startFromItem(el.dataset.kind, el.dataset.id);
     else if(a === 'open-tour') openTournamentView(el.dataset.id);
+    else if(a === 'open-new-tournament'){ go('tournaments'); if(isSignedIn()) openNewTournamentModal(); }
     else if(a === 'toggle-tteam') toggleTourTeam(el.dataset.id);
     else if(a === 'add-adhoc-team') addAdHocTeam();
     else if(a === 'rm-adhoc'){
@@ -3614,6 +3808,7 @@ function bind(){
     else if(a === 'go-friends'){ go('friends'); refreshFriendsData().then(renderFriends); }
     else if(a === 'go-admin'){ go('admin'); refreshAdminData().then(renderAdmin); }
     else if(a === 'go-profile') go('profile');
+    else if(a === 'go-auth') go('auth');
     else if(a === 'send-friend') sendFriendReq(el.dataset.uid);
     else if(a === 'accept-friend') respondFriendReq(el.dataset.id, true);
     else if(a === 'decline-friend') respondFriendReq(el.dataset.id, false);

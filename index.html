@@ -9,7 +9,7 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Cricket Connect">
 <meta name="mobile-web-app-capable" content="yes">
-<meta name="theme-color" content="#060b14">
+<meta name="theme-color" content="#0D1B2A">
 <link rel="manifest" href="./manifest.json">
 <link rel="apple-touch-icon" href="./icon-180.png">
 <link rel="icon" href="./icon-192.png">
@@ -157,12 +157,37 @@
     <h1 id="heroHeading">One platform.<span>Every cricketer.</span></h1>
     <p id="heroSub">Connect with players, build teams, and join tournaments — score ball by ball, and share a live link so anyone can follow along.</p>
     <div class="hero-actions">
-      <button class="btn secondary" id="heroFindTournaments">Find Tournaments</button>
+      <button class="btn" id="heroFindTournaments">Explore Tournaments</button>
       <button class="btn secondary" id="heroFindPlayers">Find Players</button>
-      <button class="btn" id="heroCreateTournament">Create Tournament</button>
+      <button class="btn secondary" id="heroCreateTournament">Create Tournament</button>
     </div>
     <div class="hero-stats" id="heroStats"></div>
   </section>
+
+  <!-- ============ Live Matches (global, real-time — what's happening
+       in cricket right now) ============ -->
+  <div class="card" id="homeLiveMatchesCard">
+    <div class="sec-head"><h2>Live Matches</h2>
+      <button class="icon-btn" id="homeLiveSeeAll">View all</button>
+    </div>
+    <div id="homeLiveRail"><div class="stat-dim">Loading…</div></div>
+  </div>
+
+  <!-- ============ Upcoming Tournaments (public, real data via
+       fetchPublicTournaments) ============ -->
+  <div class="card" id="homeUpcomingTourCard">
+    <div class="sec-head"><h2>Upcoming Tournaments</h2>
+      <button class="icon-btn" id="homeUpcomingTourSeeAll">View all</button>
+    </div>
+    <div id="homeUpcomingTourBox"><div class="stat-dim">Loading…</div></div>
+  </div>
+
+  <!-- ============ Top Players (points leaderboard — real data,
+       signed-in users; see cloud.js fetchTopPlayers) ============ -->
+  <div class="card" id="homeTopPlayersCard">
+    <div class="sec-head"><h2>Top Players</h2></div>
+    <div id="homeTopPlayersRail"><div class="stat-dim">Loading…</div></div>
+  </div>
 
   <!-- ============ Next match ============ -->
   <div class="card" id="homeNextMatchCard">
@@ -190,15 +215,6 @@
     <div class="stat-dim" style="margin-top:10px;">
       Tournaments you create or join show up here. Mark a tournament public when creating it
       so other organisers can discover it below.
-    </div>
-  </div>
-
-  <!-- ============ Recommended tournaments (real data: other organisers'
-       tournaments marked public, via fetchPublicTournaments) ============ -->
-  <div class="card" id="homeRecommendedCard">
-    <div class="sec-head"><h2>Recommended Tournaments</h2></div>
-    <div id="recommendedTourBox">
-      <div class="stat-dim">Loading…</div>
     </div>
   </div>
 
@@ -553,6 +569,8 @@
       <button class="icon-btn" id="addPlayerBtn" style="flex:0 0 auto;">Add</button>
     </div>
     <div id="teamFormRoster" style="margin-top:10px;"></div>
+    <label>Captain <span class="stat-dim">(optional)</span></label>
+    <select id="teamFormCaptain"><option value="">No captain set</option></select>
     <button class="btn" id="saveTeamBtn">Save Team</button>
     <button class="btn secondary small" id="clearTeamFormBtn">Clear form</button>
   </div>
@@ -929,7 +947,7 @@
     <button class="pill active" data-pt="overview">Overview</button>
     <button class="pill" data-pt="batting">Batting</button>
     <button class="pill" data-pt="bowling">Bowling</button>
-    <button class="pill" data-pt="recent">Recent</button>
+    <button class="pill" data-pt="recent">Matches</button>
     <button class="pill" data-pt="teams">Teams</button>
     <button class="pill" data-pt="tournaments">Tournaments</button>
     <button class="pill" data-pt="achievements">Achievements</button>
