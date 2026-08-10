@@ -815,6 +815,18 @@ function renderAdmin(){
   errBox.classList.toggle('hidden', !adminLoadError);
   if(adminLoadError){
     $('adminErrorText').textContent = 'Something went wrong talking to the database. Numbers below may be out of date or incomplete.';
+    // Surface the actual Supabase/Postgres error (message + code) instead of
+    // only a generic line — "relation does not exist" / "permission denied"
+    // / "column does not exist" all look identical in the generic message
+    // above, and previously only ever reached the browser console, which
+    // isn't visible on a phone. This turns "something's wrong" into
+    // something a screenshot can actually be diagnosed from.
+    const detailEl = $('adminErrorDetail');
+    const detail = adminLoadError.message
+      ? adminLoadError.message + (adminLoadError.code ? ' (code ' + adminLoadError.code + ')' : '')
+      : String(adminLoadError);
+    detailEl.textContent = detail;
+    detailEl.classList.toggle('hidden', !detail);
   }
   $('adminRefreshBtn').disabled = adminLoading;
   $('adminRefreshBtn').textContent = adminLoading ? 'Refreshing…' : '⟲ Refresh';
