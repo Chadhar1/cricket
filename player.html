@@ -102,11 +102,15 @@ function render(p){
   $('errorBox').classList.add('hidden');
   $('playerBox').classList.remove('hidden');
 
-  $('pvAvatar').innerHTML = p.photo ? `<img src="${esc(p.photo)}" alt="Player photo">`
+  const pvAvatarImg = p.photo ? `<img src="${esc(p.photo)}" alt="Player photo">`
     : p.avatarId ? avatarSVG(p.avatarId, 76) : initialsBadge(p.displayName || p.handle, 76);
+  const pvVerifyBadge = p.isOrganiser
+    ? `<span class="avatar-verify-badge" title="Verified organiser"><svg viewBox="0 0 24 24"><path d="M5 12l5 5L19 7"/></svg></span>`
+    : '';
+  $('pvAvatar').innerHTML = pvAvatarImg + pvVerifyBadge;
   $('pvName').textContent = p.displayName || ('@' + p.handle);
   $('pvRoleRow').innerHTML = [
-    p.isOrganiser ? '<span class="role-badge organiser">&#10003; Organiser</span>' : '',
+    p.isOrganiser ? '<span class="role-badge organiser">Organiser</span>' : '',
     '<span class="stat-dim">@' + esc(p.handle) + '</span>'
   ].filter(Boolean).join(' ');
   const loc = [p.district || p.area, p.country].filter(Boolean).join(', ');

@@ -731,6 +731,43 @@
       </div>
     </div>
 
+    <label>Playing identity</label>
+    <div class="stat-dim" style="margin:-2px 0 8px;">Shown on your public profile and Top Players — set by you, not calculated.</div>
+    <div class="row">
+      <div>
+        <label>Primary role</label>
+        <select id="profilePrimaryRoleInput">
+          <option value="">Not set</option>
+          <option value="Batsman">Batsman</option>
+          <option value="Bowler">Bowler</option>
+          <option value="All-rounder">All-rounder</option>
+          <option value="Wicket-keeper">Wicket-keeper</option>
+        </select>
+      </div>
+      <div>
+        <label>Batting style</label>
+        <select id="profileBattingStyleInput">
+          <option value="">Not set</option>
+          <option value="Right-hand bat">Right-hand bat</option>
+          <option value="Left-hand bat">Left-hand bat</option>
+        </select>
+      </div>
+    </div>
+    <label>Bowling style</label>
+    <select id="profileBowlingStyleInput">
+      <option value="">Not set</option>
+      <option value="Right-arm fast">Right-arm fast</option>
+      <option value="Right-arm medium">Right-arm medium</option>
+      <option value="Right-arm off-break">Right-arm off-break</option>
+      <option value="Right-arm leg-break">Right-arm leg-break</option>
+      <option value="Left-arm fast">Left-arm fast</option>
+      <option value="Left-arm medium">Left-arm medium</option>
+      <option value="Left-arm orthodox">Left-arm orthodox</option>
+      <option value="Left-arm chinaman">Left-arm chinaman</option>
+      <option value="Does not bowl">Does not bowl</option>
+    </select>
+    <div class="stat-dim" id="playingIdentityHint" style="margin-top:4px;">Set a username above first — playing identity is part of your public profile.</div>
+
     <label>Profile photo</label>
     <div class="photo-pick">
       <div class="photo-preview" id="photoPreview"></div>
@@ -941,7 +978,7 @@
     </div>
   </div>
 
-  <div class="stat-strip" id="playerStatStrip"></div>
+  <div class="stat-strip six" id="playerStatStrip"></div>
 
   <div class="pill-row" id="playerTabs">
     <button class="pill active" data-pt="overview">Overview</button>
@@ -1110,17 +1147,16 @@
 <nav class="tabbar hidden" id="tabbar" aria-label="Main navigation">
   <button data-tabnav="home" class="active">
     <svg viewBox="0 0 24 24"><path d="M3 10.5L12 3l9 7.5"/><path d="M5 9.5V21h14V9.5"/></svg>Home</button>
+  <button data-tabnav="live-now">
+    <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>Discover</button>
+  <button class="fab" id="fabNew" aria-label="Start a new match">
+    <span class="pill-live mini" id="tabLive"></span>
+    <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg></button>
   <button data-tabnav="tournaments">
     <svg viewBox="0 0 24 24"><path d="M6 4h12v5a6 6 0 01-12 0z"/><path d="M6 6H3v2a4 4 0 004 4M18 6h3v2a4 4 0 01-4 4"/><path d="M10 19h4M12 15v4"/></svg>Tournaments</button>
-  <button data-tabnav="history">
-    <svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M8 3v4M16 3v4M3 10h18"/></svg>Matches<span class="pill-live mini" id="tabLive"></span></button>
-  <button data-tabnav="friends">
-    <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M6.3 6.3a8 8 0 000 11.4M17.7 6.3a8 8 0 010 11.4M3.5 3.5a12 12 0 000 17M20.5 3.5a12 12 0 010 17"/></svg>Community</button>
   <button data-tabnav="profile">
     <svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21v-1a6 6 0 016-6h4a6 6 0 016 6v1"/></svg>Profile</button>
 </nav>
-
-<button class="fab" id="fabNew" aria-label="Start a new match"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg></button>
 
 <div id="modalRoot" role="dialog" aria-live="polite"></div>
 

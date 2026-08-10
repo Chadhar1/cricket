@@ -167,7 +167,11 @@ function toAppProfile(row){
     bio: row.bio, isOrganiser: row.is_organiser, isAdmin: row.is_admin, updatedAt: row.updated_at,
     country: row.country || '', region: row.region || '', district: row.district || '', area: row.area || '',
     points: row.points || 0, streakCurrent: row.streak_current || 0,
-    streakLongest: row.streak_longest || 0, lastCheckin: row.last_checkin || null
+    streakLongest: row.streak_longest || 0, lastCheckin: row.last_checkin || null,
+    // Self-reported playing identity — see supabase.sql's note on why these
+    // are opinion fields, not derived stats.
+    battingStyle: row.batting_style || '', bowlingStyle: row.bowling_style || '',
+    primaryRole: row.primary_role || ''
   };
 }
 
@@ -188,10 +192,11 @@ export async function fetchMyPublicProfile(){
 /* Claims/updates a handle. The table's UNIQUE constraint is the real
    uniqueness lock — a taken handle fails at the database (Postgres error
    23505), not merely in the app. */
-export async function saveMyPublicProfile({ handle, displayName, avatarId, bio }){
+export async function saveMyPublicProfile({ handle, displayName, avatarId, bio, battingStyle, bowlingStyle, primaryRole }){
   if(!ready || !currentUser) return { ok:false, error:'Not signed in.' };
   const { error } = await sb.from('profiles').upsert({
-    id: currentUser.id, handle, display_name: displayName, avatar_id: avatarId, bio: bio || ''
+    id: currentUser.id, handle, display_name: displayName, avatar_id: avatarId, bio: bio || '',
+    batting_style: battingStyle || '', bowling_style: bowlingStyle || '', primary_role: primaryRole || ''
   });
   if(error){
     console.error('saveMyPublicProfile failed:', error);
@@ -366,7 +371,7 @@ export async function fetchPublicTournaments(max = 30){
 export async function fetchTopPlayers(limit = 8){
   if(!ready || !currentUser) return [];
   const { data, error } = await sb.from('profiles')
-    .select('id, handle, display_name, avatar_id, photo, points, is_organiser, region')
+    .select('id, handle, display_name, avatar_id, photo, points, is_organiser, region, primary_role')
     .not('handle', 'is', null)
     .order('points', { ascending: false })
     .limit(limit);
@@ -374,7 +379,7 @@ export async function fetchTopPlayers(limit = 8){
   return data.map(r=>({
     uid: r.id, handle: r.handle, displayName: r.display_name || 'Player',
     avatarId: r.avatar_id, photo: r.photo || undefined, points: r.points || 0,
-    isOrganiser: r.is_organiser, region: r.region || ''
+    isOrganiser: r.is_organiser, region: r.region || '', primaryRole: r.primary_role || ''
   }));
 }
 

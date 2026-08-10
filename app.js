@@ -185,6 +185,15 @@ function fmtWhen(iso){
   else day = d.getDate() + ' ' + MONTHS[d.getMonth()];
   return time ? day + ' · ' + time : day;
 }
+/* Small day/month "date chip" (reuses the existing .event-date component
+   styling) — used on tournament cards so the date reads at a glance instead
+   of only inside a text line. Falls back to a "?" chip when no date is set
+   yet, same honesty rule as everywhere else (no invented date). */
+function dateChipHTML(iso){
+  if(!iso) return `<div class="event-date"><div class="d">?</div><div class="m">TBC</div></div>`;
+  const d = new Date(iso);
+  return `<div class="event-date"><div class="d">${d.getDate()}</div><div class="m">${MONTHS[d.getMonth()]}</div></div>`;
+}
 
 /* ---------------- account requirement ----------------
    Every feature now needs an account. Supabase keeps the session on the
@@ -460,6 +469,10 @@ function renderProfile(){
   $('profileRegionInput').value = profile.region || (myPublicProfile && myPublicProfile.region) || '';
   $('profileDistrictInput').value = profile.district || (myPublicProfile && myPublicProfile.district) || '';
   $('profileAreaInput').value = profile.area || (myPublicProfile && myPublicProfile.area) || '';
+  $('profilePrimaryRoleInput').value = (myPublicProfile && myPublicProfile.primaryRole) || '';
+  $('profileBattingStyleInput').value = (myPublicProfile && myPublicProfile.battingStyle) || '';
+  $('profileBowlingStyleInput').value = (myPublicProfile && myPublicProfile.bowlingStyle) || '';
+  $('playingIdentityHint').classList.toggle('hidden', !!(myPublicProfile && myPublicProfile.handle));
   $('profileAvatarGrid').innerHTML = AVATARS.map(a=>
     `<div class="avatar-opt ${a.id === (profile.avatarId||DEFAULT_AVATAR) ? 'sel':''}" data-pavatar="${a.id}">${avatarSVG(a.id, 46)}</div>`).join('');
 
@@ -515,16 +528,32 @@ async function saveProfileForm(){
 
     const rawHandle = $('profileHandleInput').value.trim();
     const currentHandle = myPublicProfile && myPublicProfile.handle;
-    if(rawHandle && rawHandle !== currentHandle){
+    const battingStyle = $('profileBattingStyleInput').value;
+    const bowlingStyle = $('profileBowlingStyleInput').value;
+    const primaryRole = $('profilePrimaryRoleInput').value;
+    const handleChanging = rawHandle && rawHandle !== currentHandle;
+    let handleToUse = currentHandle || null;
+    if(handleChanging){
       const v = validateHandle(rawHandle);
       if(!v.ok){ toast(v.error); renderProfile(); return; }
+      handleToUse = v.handle;
+    }
+    // Playing identity lives on the same public-profile row as the handle,
+    // so it only actually persists once a handle exists (or is being set
+    // right now) — playingIdentityHint above explains this in the UI.
+    const identityChanging = handleChanging
+      || battingStyle !== ((myPublicProfile && myPublicProfile.battingStyle) || '')
+      || bowlingStyle !== ((myPublicProfile && myPublicProfile.bowlingStyle) || '')
+      || primaryRole  !== ((myPublicProfile && myPublicProfile.primaryRole)  || '');
+    if(identityChanging && handleToUse){
       const res = await saveMyPublicProfile({
-        handle: v.handle, displayName: profile.displayName,
-        avatarId: profile.avatarId, bio: (myPublicProfile && myPublicProfile.bio) || ''
+        handle: handleToUse, displayName: profile.displayName,
+        avatarId: profile.avatarId, bio: (myPublicProfile && myPublicProfile.bio) || '',
+        battingStyle, bowlingStyle, primaryRole
       });
       if(!res.ok){ toast(res.error); renderProfile(); return; }
       myPublicProfile = await fetchMyPublicProfile();
-      toast('Username saved');
+      if(handleChanging) toast('Username saved');
     }
   }
   renderProfile(); renderHome();
@@ -1328,7 +1357,11 @@ function playerIdentity(){
       avatar: avatarHTML(84),
       isOrganiser: !!(myPublicProfile && myPublicProfile.isOrganiser),
       location: [profile.district || profile.area, profile.country].filter(Boolean).join(', '),
-      points: myPublicProfile ? (myPublicProfile.points || 0) : null
+      points: myPublicProfile ? (myPublicProfile.points || 0) : null,
+      primaryRole: (myPublicProfile && myPublicProfile.primaryRole) || '',
+      battingStyle: (myPublicProfile && myPublicProfile.battingStyle) || '',
+      bowlingStyle: (myPublicProfile && myPublicProfile.bowlingStyle) || '',
+      bio: (myPublicProfile && myPublicProfile.bio) || ''
     };
   }
   return {
@@ -1341,7 +1374,11 @@ function playerIdentity(){
     // points intentionally stay unknown (not zero) for a guest viewer or a
     // player only known by a scored-match name, so the UI can tell "no
     // points yet" apart from "we don't actually know".
-    points: pub ? (pub.points || 0) : null
+    points: pub ? (pub.points || 0) : null,
+    primaryRole: (pub && pub.primaryRole) || '',
+    battingStyle: (pub && pub.battingStyle) || '',
+    bowlingStyle: (pub && pub.bowlingStyle) || '',
+    bio: (pub && pub.bio) || ''
   };
 }
 
@@ -1350,7 +1387,10 @@ function renderPlayerProfile(){
   if(!vp){ go('home'); return; }
 
   const id = playerIdentity();
-  $('playerAvatarBig').innerHTML = id.avatar;
+  const verifyBadge = id.isOrganiser
+    ? `<span class="avatar-verify-badge" title="Verified organiser"><svg viewBox="0 0 24 24"><path d="M5 12l5 5L19 7"/></svg></span>`
+    : '';
+  $('playerAvatarBig').innerHTML = id.avatar + verifyBadge;
   $('playerNameEl').textContent = id.name;
 
   const ms = allCompletedMatches();
@@ -1362,12 +1402,17 @@ function renderPlayerProfile(){
   const myTeams = teamsForPlayer(teams, vp.name);
   const myTours = tournamentsForTeams(tournaments, myTeams.map(t=>t.name));
 
+  // Self-reported primary role wins when set (it's the player's own claim,
+  // shown on Top Players too, so profile and leaderboard stay consistent);
+  // falls back to the role derived from this device's own match history.
+  const displayRole = id.primaryRole || role;
   $('playerRoleRow').innerHTML = [
-    role ? `<span class="role-badge">${esc(role)}</span>` : '',
+    displayRole ? `<span class="role-badge">${esc(displayRole)}</span>` : '',
     // "Organiser" doubles as this app's verification signal — it's the one
-    // status here that's actually vetted (admin-approved application), so
-    // it gets a checkmark rather than inventing a separate verified flag.
-    id.isOrganiser ? `<span class="role-badge organiser">&#10003; Organiser</span>` : '',
+    // status here that's actually vetted (admin-approved application). The
+    // checkmark itself now lives on the avatar photo (avatar-verify-badge)
+    // per the reference design, so this text badge stays plain.
+    id.isOrganiser ? `<span class="role-badge organiser">Organiser</span>` : '',
     id.handle ? `<span class="stat-dim">@${esc(id.handle)}</span>` : ''
   ].filter(Boolean).join(' ');
   $('playerLocEl').textContent = id.location || (fmt ? 'Mostly plays ' + fmt : '');
@@ -1379,11 +1424,19 @@ function renderPlayerProfile(){
     $('playerRatingVal').textContent = id.points + (id.points === 1 ? ' point' : ' points');
   }
 
+  // Six real, computed career numbers — no invented "Catches" cell (the
+  // scoring engine never records which fielder took a catch, and adding
+  // that would mean changing the live-scoring UI, which the brief says not
+  // to touch for appearance's sake). Strike Rate and 5-Wicket Hauls *are*
+  // genuinely derivable from existing ball-by-ball data (stats.js
+  // withDerived: strikeRate, fiveFers), so they replace it honestly.
   $('playerStatStrip').innerHTML = [
     { v: career ? career.matches : 0, l:'Matches' },
     { v: career ? career.runs : 0,    l:'Runs' },
     { v: career ? career.wickets : 0, l:'Wickets' },
-    { v: career && career.average !== null ? career.average : '—', l:'Bat Avg' }
+    { v: career && career.average !== null ? career.average : '—', l:'Bat Avg' },
+    { v: career && career.balls > 0 ? career.strikeRate : '—', l:'Strike Rate' },
+    { v: career ? career.fiveFers : 0, l:'5W Hauls' }
   ].map(c=>`<div class="stat-box"><div class="sv">${esc(c.v)}</div><div class="sl">${esc(c.l)}</div></div>`).join('');
 
   document.querySelectorAll('#playerTabs .pill').forEach(p=>
@@ -1392,7 +1445,7 @@ function renderPlayerProfile(){
    ['teams','ptTeams'],['tournaments','ptTournaments'],['achievements','ptAchievements']]
     .forEach(([k,elId])=>$(elId).classList.toggle('hidden', playerTab !== k));
 
-  if(playerTab === 'overview') renderPlayerOverview(career, playerMatches, fmt);
+  if(playerTab === 'overview') renderPlayerOverview(career, playerMatches, fmt, id);
   else if(playerTab === 'batting') renderPlayerBatting(career, playerMatches);
   else if(playerTab === 'bowling') renderPlayerBowling(career, playerMatches);
   else if(playerTab === 'recent') renderPlayerRecent(playerMatches);
@@ -1412,9 +1465,23 @@ function trendBars(values, label){
   </div>`;
 }
 
-function renderPlayerOverview(career, playerMatches, fmt){
+function playingIdentityCardHTML(id){
+  const rows = [
+    id.bio ? ['About', esc(id.bio)] : null,
+    id.battingStyle ? ['Batting style', esc(id.battingStyle)] : null,
+    id.bowlingStyle ? ['Bowling style', esc(id.bowlingStyle)] : null
+  ].filter(Boolean);
+  if(!rows.length) return '';
+  return `<div class="card">
+    <div class="sec-head"><h2>Playing identity</h2></div>
+    <div class="kv-list">${rows.map(([k,v])=>`<div class="kv-row"><div class="kv-k">${esc(k)}</div><div class="kv-v">${v}</div></div>`).join('')}</div>
+  </div>`;
+}
+
+function renderPlayerOverview(career, playerMatches, fmt, id){
+  const identityCard = playingIdentityCardHTML(id || {});
   if(!career || !playerMatches.length){
-    $('ptOverview').innerHTML = `<div class="card"><div class="empty-note">
+    $('ptOverview').innerHTML = identityCard + `<div class="card"><div class="empty-note">
       No matches found for this player yet in the matches this device knows about.<br>
       Scores here update automatically once a match involving them is completed.</div></div>`;
     return;
@@ -1422,7 +1489,7 @@ function renderPlayerOverview(career, playerMatches, fmt){
   const recent = playerMatches.slice(0, 8).slice().reverse(); // oldest → newest, left to right
   const runsTrend = recent.filter(m=>m.runs !== null).map(m=>m.runs);
   const wktsTrend = recent.filter(m=>m.wickets !== null).map(m=>m.wickets);
-  $('ptOverview').innerHTML = `
+  $('ptOverview').innerHTML = identityCard + `
     <div class="card">
       <div class="sec-head"><h2>Career summary</h2></div>
       <div class="stat-dim">
@@ -1645,7 +1712,7 @@ async function renderUpcomingTournaments(){
   }
   box.innerHTML = list.map(t=>`
     <button class="tour-card" data-action="open-tour" data-id="${esc(t.id)}" style="width:100%;text-align:left;font-family:inherit;">
-      ${initialsBadge(t.name, 40)}
+      ${dateChipHTML(t.startDate)}
       <div class="tc-b">
         <div class="tc-n">${esc(t.name)}</div>
         <div class="tc-m">${fmtDateRange(t.startDate, t.endDate) || 'Date TBC'}${t.location ? ' &middot; ' + esc(t.location) : ''}</div>
@@ -1678,11 +1745,17 @@ function homeLiveCardHTML(r){
       <span class="badge-live"><i></i>LIVE</span>
     </div>
     <div class="lc-teams">
-      <div class="lc-side"><div class="lcs-n">${esc(m.teamA || 'Team A')}</div><div class="lcs-s">${esc(scoreFor('A'))}</div></div>
+      <div class="lc-side">
+        <div class="lc-badge">${initialsBadge(m.teamA || 'Team A', 30)}</div>
+        <div class="lcs-n">${esc(m.teamA || 'Team A')}</div><div class="lcs-s">${esc(scoreFor('A'))}</div>
+      </div>
       <div class="lc-vs">VS</div>
-      <div class="lc-side"><div class="lcs-n">${esc(m.teamB || 'Team B')}</div><div class="lcs-s">${esc(scoreFor('B'))}</div></div>
+      <div class="lc-side">
+        <div class="lc-badge">${initialsBadge(m.teamB || 'Team B', 30)}</div>
+        <div class="lcs-n">${esc(m.teamB || 'Team B')}</div><div class="lcs-s">${esc(scoreFor('B'))}</div>
+      </div>
     </div>
-    ${oversNote ? `<div class="lc-note">${esc(oversNote)}</div>` : ''}
+    ${oversNote ? `<div class="lc-note">${esc(oversNote)}<span class="lc-arrow">&#8250;</span></div>` : `<div class="lc-note lc-note-arrow-only"><span class="lc-arrow">&#8250;</span></div>`}
   </a>`;
 }
 async function renderHomeLiveMatches(){
@@ -1750,8 +1823,8 @@ async function renderHomeTopPlayers(){
     <button class="player-card" data-action="view-player" data-uid="${esc(p.uid)}" data-name="${esc(p.displayName)}">
       <div class="pc-av">${avatarHTMLFor(p, 56)}</div>
       <div class="pc-n">${esc(p.displayName)}</div>
-      <div class="rating-star">&#9733; ${esc(p.points)} pts</div>
-      <div class="pc-l">${p.isOrganiser ? 'Organiser' : (p.region || 'Player')}</div>
+      <div class="rating-star">&#9733; ${esc(p.points)}</div>
+      <div class="pc-l">${p.primaryRole || (p.isOrganiser ? 'Organiser' : (p.region || 'Player'))}</div>
     </button>`).join('') + `</div>`;
 }
 

@@ -83,7 +83,7 @@ body.app{user-select:none;}
   background:linear-gradient(160deg, var(--bg-2) 0%, var(--bg-1) 100%);
   border:1px solid var(--line);
   border-radius:16px; padding:16px; margin-bottom:14px;
-  box-shadow:inset 0 1px 0 rgba(255,255,255,.04);
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.04), 0 10px 24px -16px rgba(0,0,0,.55);
 }
 .card h2{margin:0 0 12px; font-size:15px; letter-spacing:0; text-transform:none; color:var(--ink); font-weight:600;}
 label{display:block; font-size:12px; color:var(--ink-dim); margin:10px 0 4px;}
@@ -384,8 +384,11 @@ body.has-tabs #app{padding-bottom:78px;}
   display:flex; flex-direction:column; gap:6px; align-items:flex-start;
   padding:14px; border-radius:14px; cursor:pointer; font-family:inherit; text-align:left;
   background:var(--card-bg); border:1px solid var(--card-border); color:var(--ink);
+  box-shadow:0 8px 20px -14px rgba(0,0,0,.5);
+  transition:transform .12s ease, border-color .15s ease, box-shadow .15s ease, background .12s ease;
 }
-.quick-btn:active{background:rgba(248,197,57,0.16);}
+@media (hover:hover){ .quick-btn:hover{border-color:var(--line-2); transform:translateY(-1px); box-shadow:0 12px 24px -14px rgba(0,0,0,.6);} }
+.quick-btn:active{background:rgba(248,197,57,0.16); transform:translateY(0) scale(.98); box-shadow:0 4px 12px -10px rgba(0,0,0,.5);}
 .quick-btn svg{width:22px;height:22px;fill:none;stroke:var(--gold-soft);stroke-width:1.9;stroke-linecap:round;stroke-linejoin:round;}
 .quick-btn b{font-size:14px;}
 .quick-btn span{font-size:11px; color:var(--ink-dim); line-height:1.4;}
@@ -398,7 +401,11 @@ body.has-tabs #app{padding-bottom:78px;}
   display:flex; align-items:center; gap:12px; padding:13px 14px; margin-bottom:14px;
   background:linear-gradient(160deg,var(--navy-3),var(--navy-2));
   border:1px solid var(--gold); border-radius:14px; cursor:pointer;
+  box-shadow:0 10px 22px -14px rgba(0,0,0,.55);
+  transition:transform .12s ease, box-shadow .15s ease;
 }
+@media (hover:hover){ .resume-banner:hover{transform:translateY(-1px); box-shadow:0 14px 26px -14px rgba(0,0,0,.65);} }
+.resume-banner:active{transform:translateY(0) scale(.99); box-shadow:0 6px 14px -10px rgba(0,0,0,.5);}
 .resume-banner .rb-txt{flex:1; min-width:0;}
 .resume-banner .rb-t{font-weight:700; font-size:14px;}
 .resume-banner .rb-s{font-size:11px; color:var(--gold-soft); margin-top:2px;}
@@ -452,7 +459,11 @@ body.has-tabs #app{padding-bottom:78px;}
 .tour-card{
   display:flex; align-items:center; gap:12px; padding:14px; margin-bottom:10px; cursor:pointer;
   background:var(--card-bg); border:1px solid var(--card-border); border-radius:14px;
+  box-shadow:0 8px 20px -14px rgba(0,0,0,.5);
+  transition:transform .12s ease, border-color .15s ease, box-shadow .15s ease;
 }
+@media (hover:hover){ .tour-card:hover{border-color:var(--acc); transform:translateY(-1px); box-shadow:0 12px 24px -14px rgba(0,0,0,.6);} }
+.tour-card:active{transform:translateY(0) scale(.99); box-shadow:0 4px 12px -10px rgba(0,0,0,.5);}
 .tour-card .tc-b{flex:1; min-width:0;}
 .tour-card .tc-n{font-weight:700; font-size:15px;}
 .tour-card .tc-m{font-size:11.5px; color:var(--ink-dim); margin-top:3px;}
@@ -523,8 +534,10 @@ table.table-std td.team{white-space:normal; font-weight:600;}
 .pill{
   flex-shrink:0; padding:9px 16px; border-radius:20px; cursor:pointer; font-size:13px; font-weight:600;
   background:var(--card-bg); border:1px solid var(--card-border); color:var(--ink-dim); font-family:inherit;
+  transition:background .15s ease, color .15s ease, border-color .15s ease, transform .08s ease;
 }
 .pill.active{background:var(--gold); color:#241a02; border-color:var(--gold);}
+.pill:active{transform:scale(.96);}
 
 .back-link{
   display:inline-flex; align-items:center; gap:6px; background:none; border:none; cursor:pointer;
@@ -729,10 +742,13 @@ table.table-std td.team{white-space:normal; font-weight:600;}
 
 /* Stats screen */
 .stat-strip{display:grid; grid-template-columns:repeat(4,1fr); gap:8px; margin-bottom:14px;}
+/* Career Statistics grid (player profile) — 6 real, computed stats. */
+.stat-strip.six{grid-template-columns:repeat(3,1fr);}
 .stat-box{
   background:linear-gradient(160deg, var(--bg-2) 0%, var(--bg-1) 100%);
   border:1px solid var(--card-border);
   border-radius:12px; padding:11px 6px; text-align:center;
+  box-shadow:0 6px 14px -12px rgba(0,0,0,.5);
 }
 .stat-box .sv{font-size:18px; font-weight:700; line-height:1.1;}
 .stat-box .sl{
@@ -876,6 +892,17 @@ button:focus-visible, input:focus-visible, select:focus-visible, .chip:focus-vis
   content:""; position:absolute; right:-70px; top:-70px; width:300px; height:300px;
   background:radial-gradient(circle, var(--acc-glow), transparent 68%); pointer-events:none;
 }
+/* Faint cricket-ball seam watermark — a subtle line-art texture instead of a
+   fake stock photo (no image-generation tool available this session; a
+   drawn/vector motif is honest, a fabricated "photo" of people would not
+   be). Kept very low-opacity so it reads as premium texture, not clutter. */
+.hero::before{
+  content:""; position:absolute; right:-40px; bottom:-60px; width:220px; height:220px;
+  opacity:.07; pointer-events:none; z-index:0;
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ccircle cx='50' cy='50' r='47' fill='none' stroke='white' stroke-width='2'/%3E%3Cpath d='M50 3 A47 47 0 0 1 50 97' fill='none' stroke='white' stroke-width='1.4' stroke-dasharray='3 3'/%3E%3Cpath d='M50 3 A47 47 0 0 0 50 97' fill='none' stroke='white' stroke-width='1.4' stroke-dasharray='3 3'/%3E%3C/svg%3E");
+  background-size:contain; background-repeat:no-repeat;
+}
+.hero > *{position:relative; z-index:1;}
 .hero h1{
   margin:0 0 4px; font-size:26px; line-height:1.18; font-weight:700;
   letter-spacing:-.4px; position:relative;
@@ -1031,8 +1058,12 @@ button:focus-visible, input:focus-visible, select:focus-visible, .chip:focus-vis
 .live-rail{display:flex; gap:12px; overflow-x:auto; padding-bottom:6px; margin-bottom:4px;}
 .live-card{
   flex:0 0 260px; background:var(--bg-2); border:1px solid var(--line);
-  border-radius:15px; padding:14px;
+  border-radius:15px; padding:14px; display:block; text-decoration:none; color:inherit;
+  box-shadow:0 10px 22px -14px rgba(0,0,0,.55);
+  transition:transform .12s ease, border-color .15s ease, box-shadow .15s ease;
 }
+@media (hover:hover){ .live-card:hover{border-color:rgba(239,68,68,.45); transform:translateY(-2px); box-shadow:0 14px 28px -14px rgba(0,0,0,.65);} }
+.live-card:active{transform:translateY(0) scale(.99); box-shadow:0 6px 14px -10px rgba(0,0,0,.5);}
 .live-card .lc-top{display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;}
 .live-card .lc-comp{font-size:11.5px; color:var(--ink-dim); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
 .badge-live{
@@ -1044,6 +1075,8 @@ button:focus-visible, input:focus-visible, select:focus-visible, .chip:focus-vis
 .badge-live i{width:5px;height:5px;border-radius:50%;background:var(--live);animation:pulse 1.4s infinite;}
 .lc-teams{display:flex; align-items:center; justify-content:space-between; gap:8px;}
 .lc-side{flex:1; min-width:0; text-align:center;}
+.lc-side .lc-badge{display:flex; justify-content:center; margin-bottom:6px;}
+.lc-side .lc-badge svg{border-radius:50%; box-shadow:0 0 0 2px var(--bg-2), 0 0 0 3px var(--line-2);}
 .lc-side .lcs-n{font-size:11.5px; color:var(--ink-2); margin-bottom:5px;
   overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
 .lc-side .lcs-s{font-size:19px; font-weight:700; color:var(--ink); line-height:1.1;}
@@ -1054,9 +1087,12 @@ button:focus-visible, input:focus-visible, select:focus-visible, .chip:focus-vis
   font-size:9.5px; font-weight:700; color:var(--ink-dim);
 }
 .lc-note{
+  display:flex; align-items:center; justify-content:center; gap:4px;
   font-size:11px; color:var(--ink-dim); text-align:center; margin-top:11px;
   padding-top:10px; border-top:1px solid var(--line);
 }
+.lc-note-arrow-only{border-top:none; margin-top:6px; padding-top:0; justify-content:flex-end;}
+.lc-arrow{font-size:15px; line-height:1; color:var(--acc-2); font-weight:700;}
 
 /* ---- Quick action strip ---- */
 .qa-rail{
@@ -1066,9 +1102,11 @@ button:focus-visible, input:focus-visible, select:focus-visible, .chip:focus-vis
   background:linear-gradient(160deg, var(--bg-2) 0%, var(--bg-1) 100%);
   border:1px solid var(--line); border-radius:14px;
   padding:14px 10px; text-align:center; cursor:pointer; font-family:inherit;
-  transition:border-color .15s ease, transform .15s ease;
+  box-shadow:0 8px 18px -14px rgba(0,0,0,.5);
+  transition:border-color .15s ease, transform .15s ease, box-shadow .15s ease;
 }
-.qa-item:hover{border-color:var(--acc); background:var(--bg-3); transform:translateY(-1px);}
+@media (hover:hover){ .qa-item:hover{border-color:var(--acc); background:var(--bg-3); transform:translateY(-1px); box-shadow:0 12px 24px -14px rgba(0,0,0,.6);} }
+.qa-item:active{transform:translateY(0) scale(.97); box-shadow:0 4px 10px -8px rgba(0,0,0,.5);}
 .qa-ico{
   width:38px; height:38px; margin:0 auto 8px; border-radius:11px;
   background:var(--acc-glow); display:flex; align-items:center; justify-content:center;
@@ -1079,15 +1117,26 @@ button:focus-visible, input:focus-visible, select:focus-visible, .chip:focus-vis
 .qa-item span{display:block; font-size:10px; color:var(--ink-dim); margin-top:2px; line-height:1.4;}
 
 /* ---- Floating action button ---- */
-.fab{
-  position:fixed; left:50%; transform:translateX(-50%); bottom:calc(30px + env(safe-area-inset-bottom));
-  width:54px; height:54px; border-radius:50%; border:3px solid var(--bg-0);
+/* Create button — lives inline in the tab bar's flex row (not floating over
+   it) but raised above the bar line so it still reads as the visually
+   dominant action, per the brief's "Create button should have strong
+   visual emphasis". */
+/* .tabbar .fab (not just .fab) throughout, so this reliably beats the
+   generic ".tabbar button" rules above (padding, font-size, gap, column
+   flex-direction) that would otherwise leak into this button too, since
+   it's structurally a <button> inside .tabbar like all the nav items. */
+.tabbar .fab{
+  position:relative; flex:0 0 58px; align-self:center; margin-top:-22px; padding:0;
+  width:58px; height:58px; border-radius:50%; border:3px solid var(--bg-0);
   background:var(--acc); color:#fff; z-index:45; cursor:pointer;
   display:flex; align-items:center; justify-content:center;
   box-shadow:0 6px 20px rgba(30,125,58,.45);
+  transition:transform .1s ease, filter .12s ease;
 }
-.fab svg{width:24px;height:24px;fill:none;stroke:currentColor;stroke-width:2.4;stroke-linecap:round;}
-.fab:active{transform:translateX(-50%) scale(.94);}
+.tabbar .fab svg{width:24px;height:24px;fill:none;stroke:currentColor;stroke-width:2.4;stroke-linecap:round;}
+@media (hover:hover){ .tabbar .fab:hover{filter:brightness(1.08);} }
+.tabbar .fab:active{transform:scale(.94);}
+.tabbar .fab .pill-live.mini{top:2px; left:calc(50% + 12px);}
 
 /* ---- Donut stat ---- */
 .donut-wrap{display:flex; align-items:center; gap:16px;}
@@ -1110,8 +1159,11 @@ button:focus-visible, input:focus-visible, select:focus-visible, .chip:focus-vis
 .player-card{
   flex:0 0 118px; background:var(--bg-2); border:1px solid var(--line);
   border-radius:14px; padding:12px 10px; text-align:center; cursor:pointer;
+  box-shadow:0 8px 18px -14px rgba(0,0,0,.5);
+  transition:transform .12s ease, border-color .15s ease, box-shadow .15s ease;
 }
-.player-card:hover{border-color:var(--acc);}
+@media (hover:hover){ .player-card:hover{border-color:var(--acc); transform:translateY(-2px); box-shadow:0 12px 24px -14px rgba(0,0,0,.6);} }
+.player-card:active{transform:translateY(0) scale(.97); box-shadow:0 4px 10px -8px rgba(0,0,0,.5);}
 .player-card .pc-av{display:flex; justify-content:center; margin-bottom:8px;}
 .player-card .pc-n{font-size:12.5px; font-weight:600; white-space:nowrap;
   overflow:hidden; text-overflow:ellipsis;}
@@ -1134,7 +1186,6 @@ button:focus-visible, input:focus-visible, select:focus-visible, .chip:focus-vis
     padding:20px 14px; overflow-y:auto; z-index:30;
   }
   .tabbar{display:none !important;}
-  .fab{display:none;}
 
   #app{max-width:1080px; padding:22px 26px 40px;}
 
@@ -1148,6 +1199,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, .chip:focus-vis
   .qa-rail{grid-template-columns:repeat(6,1fr);}
   .quick-grid{grid-template-columns:repeat(4,1fr);}
   .stat-strip{grid-template-columns:repeat(4,1fr);}
+  .stat-strip.six{grid-template-columns:repeat(6,1fr);}
 
   .desk-cols{display:grid; grid-template-columns:1fr 1fr 1fr; gap:16px; align-items:start;}
   .desk-cols > *{margin-bottom:0;}
@@ -1178,10 +1230,20 @@ button:focus-visible, input:focus-visible, select:focus-visible, .chip:focus-vis
 .photo-btns{display:flex; gap:8px; flex-wrap:wrap;}
 .photo-btns .icon-btn{padding:8px 13px;}
 .avatar-big-wrap{
-  width:88px; height:88px; border-radius:50%; overflow:hidden; margin:0 auto;
+  position:relative; width:88px; height:88px; border-radius:50%; overflow:hidden; margin:0 auto;
   display:flex; align-items:center; justify-content:center; border:2px solid var(--line-2);
 }
 .avatar-big-wrap img{width:100%; height:100%; object-fit:cover;}
+/* Verified badge, overlaid on the avatar photo itself (not a separate text
+   chip) — "Organiser" is the one status this app actually vets (admin-
+   approved application), so it doubles as the verification signal. */
+.avatar-verify-badge{
+  position:absolute; right:-1px; bottom:-1px; width:22px; height:22px; border-radius:50%;
+  background:var(--acc); border:2px solid var(--bg-1); display:flex; align-items:center;
+  justify-content:center; color:#fff; z-index:2;
+}
+.avatar-verify-badge svg{width:12px; height:12px; fill:none; stroke:#fff; stroke-width:3;
+  stroke-linecap:round; stroke-linejoin:round;}
 .pc-av img, .homeAvatar img{width:100%; height:100%; object-fit:cover;}
 .pc-av{width:44px; height:44px; border-radius:50%; overflow:hidden;}
 

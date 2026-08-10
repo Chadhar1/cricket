@@ -688,6 +688,19 @@ end;
 $$;
 
 -- ---------------------------------------------------------------------------
+-- UI/UX modernization: self-reported playing identity, shown on the player
+-- profile ("Batting Style" / "Bowling Style" / role badge) and Top Players.
+-- Deliberately self-reported, not derived — the app has no way to compute
+-- a "skill rating" or a cross-user playing role from real data, and the
+-- brief is explicit about never faking statistics. These three are just
+-- opinion fields a player fills in about themselves, same trust level as
+-- the existing bio/location fields, covered by the same RLS policies.
+-- ---------------------------------------------------------------------------
+alter table public.profiles add column if not exists batting_style text not null default '' check (char_length(batting_style) <= 30);
+alter table public.profiles add column if not exists bowling_style text not null default '' check (char_length(bowling_style) <= 30);
+alter table public.profiles add column if not exists primary_role  text not null default '' check (char_length(primary_role) <= 20);
+
+-- ---------------------------------------------------------------------------
 -- Bootstrap: run this yourself once, after you've signed up in the app, to
 -- become the first admin. Replace with your actual auth user id.
 -- ---------------------------------------------------------------------------
