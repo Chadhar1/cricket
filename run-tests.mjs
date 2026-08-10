@@ -13,7 +13,8 @@ import {
   inningsLine, topPerformers, chaseInfo,
   currentPartnership, lastOvers, recentRuns, projectedScore, tossText,
   playerOfTheMatch, createSuperOver, scoreProgression,
-  maxOversPerBowler, bowlerRemaining, bowlerExhausted, eligibleBowlers
+  maxOversPerBowler, bowlerRemaining, bowlerExhausted, eligibleBowlers,
+  allowedDismissalsFor
 } from './engine.js';
 
 import {
@@ -136,6 +137,99 @@ head('Engine - wickets');
   const r = wkt(m,{});
   check(r.wicketEndedInnings && r.inningsOver,'all out ends the innings');
   check(curInnings(m).batters.length===3,'no phantom batter on the last wicket');
+}
+
+head('Engine - no ball & Free Hit (ICC Law 21)');
+{
+  // A no ball arms the Free Hit for the *next* ball, not itself.
+  const m = mk(20,10);
+  const r1 = ex(m,'nb',0);
+  check(r1.isFreeHitBall===false,'the no ball itself is not the free hit (nothing was pending yet)');
+  check(curInnings(m).freeHit===true,'no ball arms the Free Hit for the next ball');
+  const r2 = run(m,1);
+  check(r2.isFreeHitBall===true,'next ball is played as the Free Hit');
+  check(curInnings(m).freeHit===false,'a fair ball consumes the Free Hit');
+}
+{
+  // Free Hit rolls over if the free-hit ball is itself a no ball.
+  const m = mk(20,10);
+  ex(m,'nb',0);
+  const r2 = ex(m,'nb',0);
+  check(r2.isFreeHitBall===true,'the second no ball was itself played as the pending Free Hit');
+  check(curInnings(m).freeHit===true,'Free Hit still pending after a no ball on a Free Hit ball');
+}
+{
+  // Free Hit rolls over if the free-hit ball is called wide too.
+  const m = mk(20,10);
+  ex(m,'nb',0);
+  const r2 = ex(m,'wd',0);
+  check(r2.isFreeHitBall===true,'the wide was played as the pending Free Hit');
+  check(curInnings(m).freeHit===true,'Free Hit still pending after a wide on the Free Hit ball');
+  const r3 = run(m,0);
+  check(r3.isFreeHitBall===true,'fair ball after that is finally the Free Hit');
+  check(curInnings(m).freeHit===false,'Free Hit consumed once a fair ball is bowled');
+}
+{
+  // Bowled/Caught/LBW/Stumped/Hit Wicket are all impossible off a no ball.
+  for(const type of ['Bowled','Caught','LBW','Stumped','Hit Wicket']){
+    const m2 = mk(20,10);
+    const r = playBall(m2,{extra:'nb',batRuns:0,isWicket:true,wicketType:type,whoOut:'striker',newBatsmanName:'NEXT'});
+    check(r.wicketRejected===true, type+' rejected off a no ball');
+    check(curInnings(m2).wickets===0, type+' off a no ball does not fall');
+    check(curInnings(m2).runs===1, type+' off a no ball still scores the penalty run');
+  }
+}
+{
+  // Run Out off a no ball: legal, and combines correctly with the nb run.
+  const m = mk(20,10);
+  const r = playBall(m,{extra:'nb',batRuns:1,isWicket:true,wicketType:'Run Out',whoOut:'striker',newBatsmanName:'NEXT'});
+  check(r.wicketRejected===false,'run out allowed off a no ball');
+  check(curInnings(m).wickets===1,'run out off a no ball is recorded');
+  check(curInnings(m).runs===2,'1 no-ball penalty + 1 run actually run');
+  check(curInnings(m).extras.nb===1,'no-ball extra still recorded alongside the run out');
+  check(curInnings(m).bowlers[0].wickets===0,'run out never credited to the bowler');
+}
+{
+  // A wide is less restrictive than a no ball: Stumped is still legal.
+  const m = mk(20,10);
+  const rStumped = playBall(m,{extra:'wd',batRuns:0,isWicket:true,wicketType:'Stumped',whoOut:'striker',newBatsmanName:'NEXT'});
+  check(rStumped.wicketRejected===false,'stumped allowed off a wide');
+  check(curInnings(m).wickets===1,'stumping off a wide recorded');
+  for(const type of ['Bowled','Caught','LBW','Hit Wicket']){
+    const m2 = mk(20,10);
+    const r = playBall(m2,{extra:'wd',batRuns:0,isWicket:true,wicketType:type,whoOut:'striker',newBatsmanName:'NEXT'});
+    check(r.wicketRejected===true, type+' rejected off a wide');
+    check(curInnings(m2).wickets===0, type+' off a wide does not fall');
+  }
+}
+{
+  // A fair ball bowled *as* the Free Hit carries the same protection as a
+  // no ball (this is the whole point of the Free Hit).
+  const m = mk(20,10);
+  ex(m,'nb',0); // arms the Free Hit
+  const rBowled = playBall(m,{extra:null,batRuns:0,isWicket:true,wicketType:'Bowled',whoOut:'striker',newBatsmanName:'NEXT'});
+  check(rBowled.wicketRejected===true,'bowled rejected on a Free Hit fair ball');
+  check(curInnings(m).wickets===0,'no wicket falls off a rejected Free Hit dismissal');
+  check(curInnings(m).freeHit===false,'Free Hit still consumed by the fair ball even though the wicket was rejected');
+}
+{
+  const m = mk(20,10);
+  ex(m,'nb',0);
+  const rRunOut = playBall(m,{extra:null,batRuns:1,isWicket:true,wicketType:'Run Out',whoOut:'striker',newBatsmanName:'NEXT'});
+  check(rRunOut.wicketRejected===false,'run out allowed on a Free Hit fair ball');
+  check(curInnings(m).wickets===1,'run out on a Free Hit is recorded');
+}
+{
+  // allowedDismissalsFor is the single source of truth the UI dropdown
+  // uses too — cover it directly.
+  const inn = curInnings(mk(20,10));
+  check(!allowedDismissalsFor(inn,'nb').includes('Bowled'),'allowedDismissalsFor excludes Bowled for nb');
+  check(allowedDismissalsFor(inn,'nb').includes('Run Out'),'allowedDismissalsFor includes Run Out for nb');
+  check(allowedDismissalsFor(inn,'wd').includes('Stumped'),'allowedDismissalsFor includes Stumped for wd');
+  check(!allowedDismissalsFor(inn,'wd').includes('Caught'),'allowedDismissalsFor excludes Caught for wd');
+  check(allowedDismissalsFor(inn,null).includes('Bowled'),'allowedDismissalsFor allows Bowled on a normal fair ball');
+  inn.freeHit = true;
+  check(!allowedDismissalsFor(inn,null).includes('Bowled'),'allowedDismissalsFor excludes Bowled on a Free Hit fair ball');
 }
 
 head('Engine - innings and results');

@@ -178,6 +178,16 @@ input:focus, textarea:focus, select:focus{
   background:radial-gradient(420px 200px at 50% -20%, var(--acc-glow), transparent 70%);
 }
 .sb-teams{font-size:12px; color:var(--gold-soft); letter-spacing:1px; text-transform:uppercase; position:relative;}
+/* Free Hit banner — matches the on-screen call every broadcast makes: bold,
+   impossible to miss, gone the instant a fair ball is bowled (see engine.js
+   playBall's Free Hit rollover). Reuses the existing pulse keyframe rather
+   than adding a new animation. */
+.freehit-banner{
+  display:inline-block; margin:2px 0 4px; padding:4px 12px; border-radius:20px;
+  background:rgba(248,197,57,.16); border:1px solid var(--gold);
+  color:var(--gold-soft); font-size:11px; font-weight:800; letter-spacing:.8px;
+  text-transform:uppercase; position:relative; animation:pulse 1.6s infinite;
+}
 .sb-score{font-size:44px; font-weight:800; margin:4px 0; position:relative; line-height:1.1;}
 .sb-score span{font-size:24px; color:var(--ink-dim); font-weight:600;}
 .sb-meta{display:flex; justify-content:center; gap:16px; font-size:12px; color:var(--ink-dim); position:relative; flex-wrap:wrap;}
@@ -194,6 +204,10 @@ input:focus, textarea:focus, select:focus{
 .over-ball.six{background:var(--gold); color:#241a02; border-color:var(--gold);}
 .over-ball.wicket{background:var(--red); border-color:var(--red);}
 .over-ball.extra{background:#3a4a6b;}
+/* Ball bowled as a Free Hit — outlined in gold on top of whatever other
+   outcome color already applies, so it stays visible in the over history
+   after the banner above has gone (see engine.js thisOverBalls.freeHit). */
+.over-ball.freehit{box-shadow:0 0 0 2px var(--gold);}
 
 .batters, .bowler-line{
   display:flex; justify-content:space-between; align-items:center; gap:10px;

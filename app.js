@@ -11,7 +11,8 @@ import {
   bowlerEcon, strikeRate, newBowler, makeId, inningsLine, topPerformers,
   currentPartnership, lastOvers, recentRuns, projectedScore, tossText,
   playerOfTheMatch, createSuperOver,
-  maxOversPerBowler, bowlerRemaining, bowlerExhausted, eligibleBowlers
+  maxOversPerBowler, bowlerRemaining, bowlerExhausted, eligibleBowlers,
+  allowedDismissalsFor
 } from './engine.js';
 
 import {
@@ -2247,6 +2248,14 @@ function openExtraModal(type){
     <button class="btn secondary" data-action="close">Cancel</button>`);
 }
 
+/* The "Delivery" selector below is what lets a run out (or the other
+   dismissals still legal on an irregular ball) actually be scored *with*
+   its no-ball/wide, instead of forcing a choice between recording the
+   extra or the wicket. The "How out" list is filtered live to whatever
+   ICC Law 21 (No ball) actually permits for the chosen delivery — see
+   engine.js allowedDismissalsFor for the exact rules (a no ball or a Free
+   Hit fair ball allow only Run Out / Obstructing the Field / retirements;
+   a wide additionally still allows Stumped). */
 function openWicketModal(){
   const inn = curInnings(match);
   const s = inn.batters[inn.strikerIdx], ns = inn.batters[inn.nonStrikerIdx];
@@ -2254,16 +2263,22 @@ function openWicketModal(){
   const roster = rosterFor(teamName(match, inn.battingTeam))
     .filter(p=>!inn.batters.some(b=>b.name.toLowerCase() === p.toLowerCase()));
   openModal(`<h3>Wicket</h3>
+    ${inn.freeHit ? `<div class="stat-dim" style="color:var(--gold-soft);font-weight:600;margin-bottom:10px;">
+      FREE HIT is active — Bowled, Caught, LBW, Stumped and Hit Wicket can't apply unless this ball is also a no ball or wide.</div>` : ''}
+    <label>Delivery</label>
+    <select id="wkDelivery">
+      <option value="">Fair ball</option>
+      <option value="wd">Wide</option>
+      <option value="nb">No Ball</option>
+    </select>
     <label>How out</label>
-    <select id="wkType">${['Bowled','Caught','LBW','Run Out','Stumped','Hit Wicket',
-      'Retired Out','Retired Hurt','Obstructing the Field','Other']
-      .map(t=>`<option value="${t}">${t}</option>`).join('')}</select>
+    <select id="wkType"></select>
     <label>Which batter</label>
     <div class="radio-line"><input type="radio" name="whoOut" value="striker" id="woS" checked>
       <label for="woS" style="margin:0;color:var(--ink);">${esc(s.name)} (striker)</label></div>
     <div class="radio-line"><input type="radio" name="whoOut" value="nonstriker" id="woN">
       <label for="woN" style="margin:0;color:var(--ink);">${esc(ns.name)} (non-striker)</label></div>
-    <label>Runs completed before the dismissal</label>
+    <label id="wkRunsLabel">Runs completed before the dismissal</label>
     <input type="number" id="wkRuns" min="0" max="6" value="0">
     ${last ? '<div class="stat-dim" style="margin-top:12px;">Last wicket — the innings will close.</div>'
       : `<label>Incoming batter</label>
@@ -2271,6 +2286,20 @@ function openWicketModal(){
          <div class="chip-row">${chipsHTML('wkNewBatter', roster)}</div>`}
     <button class="btn danger" data-action="confirm-wicket">Confirm Wicket</button>
     <button class="btn secondary" data-action="close">Cancel</button>`);
+
+  const deliverySel = $('wkDelivery'), typeSel = $('wkType'), runsLabel = $('wkRunsLabel');
+  function refreshWicketOptions(){
+    const extra = deliverySel.value || null;
+    const prevType = typeSel.value;
+    const allowed = allowedDismissalsFor(inn, extra);
+    typeSel.innerHTML = allowed.map(t=>`<option value="${t}">${t}</option>`).join('');
+    typeSel.value = allowed.includes(prevType) ? prevType : allowed[0];
+    runsLabel.textContent = extra === 'nb' ? 'Runs scored off the bat before the dismissal'
+      : extra === 'wd' ? 'Extra run(s) run off the wide before the dismissal'
+      : 'Runs completed before the dismissal';
+  }
+  deliverySel.addEventListener('change', refreshWicketOptions);
+  refreshWicketOptions();
 }
 
 function submitWicket(){
@@ -2279,15 +2308,26 @@ function submitWicket(){
   const last = (inn.wickets + 1) >= inn.allOutWickets;
   const newName = last ? '' : ($('wkNewBatter').value || '').trim();
   if(!last && !newName){ toast('Enter the incoming batter'); return; }
+  const delivery = $('wkDelivery').value || null;
   const ball = {
-    extra:null,
+    extra: delivery,
     batRuns: Math.max(0, parseInt($('wkRuns').value || '0', 10)),
     isWicket:true,
     wicketType: $('wkType').value,
     whoOut: document.querySelector('input[name=whoOut]:checked').value,
     newBatsmanName: newName
   };
-  closeModal(); snapshot(); afterBall(playBall(match, ball));
+  closeModal(); snapshot();
+  const res = playBall(match, ball);
+  // Belt-and-braces: the dropdown above only ever offers legal options, so
+  // this should be unreachable in normal use, but the engine is the source
+  // of truth — if it ever disagrees, tell the scorer rather than silently
+  // dropping the appeal.
+  if(res.wicketRejected){
+    toast(`Not out — ${ball.wicketType} isn't a legal dismissal off ${
+      delivery === 'wd' ? 'a wide' : delivery === 'nb' ? 'a no ball' : 'a Free Hit'}`);
+  }
+  afterBall(res);
 }
 
 function openNewBowlerModal(){
@@ -2415,6 +2455,7 @@ function renderLive(){
   $('liveContext').textContent = match.tournamentId
     ? (tournaments.find(t=>t.id === match.tournamentId)?.name || 'LIVE').toUpperCase() : 'LIVE';
   $('sbTeams').textContent = teamName(match, inn.battingTeam) + ' vs ' + teamName(match, inn.bowlingTeam);
+  $('sbFreeHit').classList.toggle('hidden', !inn.freeHit);
   $('sbScore').innerHTML = inn.runs + '<span>/' + inn.wickets + '</span>';
   $('sbOvers').textContent = fmtOvers(inn.legalBalls) + ' / ' + match.oversLimit;
   $('sbCRR').textContent = runRate(inn.runs, inn.legalBalls);
@@ -2431,7 +2472,8 @@ function renderLive(){
     let c = 'over-ball';
     if(b.wicket) c += ' wicket'; else if(b.four) c += ' four';
     else if(b.six) c += ' six'; else if(b.extra) c += ' extra';
-    return `<div class="${c}">${esc(b.txt)}</div>`;
+    if(b.freeHit) c += ' freehit';
+    return `<div class="${c}" title="${b.freeHit ? 'Free Hit' : ''}">${esc(b.txt)}</div>`;
   }).join('') : '<div class="stat-dim">New over</div>';
 
   const st = inn.batters[inn.strikerIdx];

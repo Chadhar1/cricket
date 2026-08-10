@@ -9,6 +9,37 @@
    are not the bowler's wicket. */
 export const BOWLER_CREDITED_DISMISSALS = new Set(['Bowled','Caught','LBW','Stumped','Hit Wicket']);
 
+export const DISMISSAL_TYPES = ['Bowled','Caught','LBW','Run Out','Stumped','Hit Wicket',
+  'Retired Out','Retired Hurt','Obstructing the Field','Other'];
+
+/* ICC Law 21 (No ball): the striker cannot be given out except Run Out,
+   Hit the Ball Twice, or Obstructing the Field (Handled the Ball was folded
+   into Obstructing the Field in the 2017 Code) — Bowled, Caught, LBW,
+   Stumped and Hit Wicket are all impossible off a no ball. A Free Hit
+   delivery carries the same protection (that's the whole point of it), so
+   this same set is reused for a fair ball faced as a Free Hit. */
+export const DISMISSALS_BLOCKED_ON_NO_BALL = new Set(['Bowled','Caught','LBW','Stumped','Hit Wicket']);
+
+/* A Wide is less protective: Stumped is explicitly still allowed (the
+   keeper can stump a batter who wanders while a wide goes through), but
+   Bowled/Caught/LBW/Hit Wicket remain impossible since the ball was never
+   a fair delivery at the striker. */
+export const DISMISSALS_BLOCKED_ON_WIDE = new Set(['Bowled','Caught','LBW','Hit Wicket']);
+
+/* What "How out" options are legal for a given delivery, given the
+   innings' current Free Hit state. `deliveryExtra` is the extra (if any)
+   being recorded on *this* ball — 'nb' | 'wd' | null/undefined for a fair
+   ball. Shared by the engine's own validation and by the UI, so the
+   dropdown the scorer sees always matches what will actually be accepted. */
+export function allowedDismissalsFor(inn, deliveryExtra){
+  let blocked;
+  if(deliveryExtra === 'nb') blocked = DISMISSALS_BLOCKED_ON_NO_BALL;
+  else if(deliveryExtra === 'wd') blocked = DISMISSALS_BLOCKED_ON_WIDE;
+  else if(inn && inn.freeHit) blocked = DISMISSALS_BLOCKED_ON_NO_BALL;
+  else blocked = null;
+  return blocked ? DISMISSAL_TYPES.filter(t=>!blocked.has(t)) : DISMISSAL_TYPES.slice();
+}
+
 export function newBatter(name){
   return { name: name || 'Batter', runs:0, balls:0, fours:0, sixes:0, out:false, howOut:'' };
 }
@@ -33,7 +64,8 @@ export function newInnings(battingTeam, bowlingTeam, strikerName, nonStrikerName
     fow:[],                 // fall of wickets
     overRuns:[],            // total team runs in each completed over
     _overTeamRuns:0,        // running total for the over in progress
-    partnerships:[ newPartnership(strikerName, nonStrikerName) ]
+    partnerships:[ newPartnership(strikerName, nonStrikerName) ],
+    freeHit:false            // true when the *next* ball bowled is a Free Hit
   };
 }
 
@@ -105,12 +137,28 @@ export function swapStrike(inn){
      whoOut: 'striker' | 'nonstriker',
      newBatsmanName: string
    }
-   Returns { overJustEnded, inningsOver, wicketEndedInnings }
+   Returns { overJustEnded, inningsOver, wicketEndedInnings, isFreeHitBall,
+             wicketRejected }
+
+   Free Hit / no-ball dismissal law (ICC): if `ball.isWicket` names a
+   dismissal that's impossible for this delivery — Bowled/Caught/LBW/
+   Stumped/Hit Wicket off a no ball or a Free Hit fair ball, or
+   Bowled/Caught/LBW/Hit Wicket off a wide — the wicket is rejected. The
+   delivery still counts and any runs still score; only the illegal
+   dismissal is refused (see allowedDismissalsFor). `wicketRejected` tells
+   the caller this happened so it can warn the scorer instead of silently
+   dropping the appeal.
    --------------------------------------------------------------------------- */
 export function playBall(match, ball){
   const inn = curInnings(match);
   const isLegal = !(ball.extra === 'wd' || ball.extra === 'nb');
+  const wasFreeHit = !!inn.freeHit;
   let teamRuns = 0, batsmanRuns = 0, runsRun = 0;
+
+  // Must be checked before inn.freeHit is updated for the *next* ball below
+  // — allowedDismissalsFor reads inn.freeHit as "is this ball a free hit".
+  const wicketBlocked = !!(ball.isWicket && !allowedDismissalsFor(inn, ball.extra).includes(ball.wicketType));
+  const effectiveWicket = !!(ball.isWicket && !wicketBlocked);
 
   if(ball.extra === 'wd'){
     const extra = 1 + (ball.batRuns || 0);
@@ -162,7 +210,7 @@ export function playBall(match, ball){
 
   // Ball marker for the over track
   let marker;
-  if(ball.isWicket) marker = 'W';
+  if(effectiveWicket) marker = 'W';
   else if(ball.extra === 'wd') marker = 'wd' + (ball.batRuns ? '+' + ball.batRuns : '');
   else if(ball.extra === 'nb') marker = 'nb' + (ball.batRuns ? '+' + ball.batRuns : '');
   else if(ball.extra === 'b')  marker = (ball.batRuns || 0) + 'b';
@@ -171,16 +219,17 @@ export function playBall(match, ball){
 
   inn.thisOverBalls.push({
     txt: marker,
-    wicket: !!ball.isWicket,
-    four: (!ball.isWicket && !ball.extra && batsmanRuns === 4),
-    six:  (!ball.isWicket && !ball.extra && batsmanRuns === 6),
-    extra: !!ball.extra
+    wicket: effectiveWicket,
+    four: (!effectiveWicket && !ball.extra && batsmanRuns === 4),
+    six:  (!effectiveWicket && !ball.extra && batsmanRuns === 6),
+    extra: !!ball.extra,
+    freeHit: wasFreeHit
   });
 
-  addCommentary(match, inn, ball, marker, striker.name, bowler.name, teamRuns);
+  addCommentary(match, inn, ball, marker, striker.name, bowler.name, teamRuns, wasFreeHit, wicketBlocked);
 
   let wicketEndedInnings = false;
-  if(ball.isWicket){
+  if(effectiveWicket){
     inn.wickets += 1;
     // Only these dismissal types are credited to the bowler's own tally —
     // a run out, retirement or obstructing-the-field still ends the
@@ -216,6 +265,14 @@ export function playBall(match, ball){
 
   if(isLegal) inn.legalBalls += 1;
 
+  // Free Hit rollover (ICC playing conditions): a no ball always makes the
+  // *next* delivery a Free Hit; if that next delivery is itself a no ball
+  // or a wide, the Free Hit carries forward again (the striker never got a
+  // fair opportunity to use it); any other — fair, bye, leg bye — delivery
+  // consumes it.
+  if(ball.extra === 'nb') inn.freeHit = true;
+  else if(ball.extra !== 'wd') inn.freeHit = false;
+
   let overJustEnded = false;
   if(isLegal && inn.legalBalls > 0 && inn.legalBalls % 6 === 0){
     overJustEnded = true;
@@ -239,31 +296,35 @@ export function playBall(match, ball){
   const inningsOver = wicketEndedInnings || oversDone || chaseDone;
 
   match.updatedAt = Date.now();
-  return { overJustEnded, inningsOver, wicketEndedInnings };
+  return { overJustEnded, inningsOver, wicketEndedInnings, isFreeHitBall: wasFreeHit, wicketRejected: wicketBlocked };
 }
 
-function addCommentary(match, inn, ball, marker, batterName, bowlerName, teamRuns){
+function addCommentary(match, inn, ball, marker, batterName, bowlerName, teamRuns, wasFreeHit, wicketBlocked){
   if(!match.commentary) match.commentary = [];
   const ballNo = fmtOvers(inn.legalBalls + ((ball.extra === 'wd' || ball.extra === 'nb') ? 0 : 1));
+  const fhPrefix = wasFreeHit ? 'Free Hit! ' : '';
   let txt;
-  if(ball.isWicket){
-    txt = `${bowlerName} to ${batterName}, OUT! ${ball.wicketType || 'Wicket'}`;
+  if(ball.isWicket && wicketBlocked){
+    txt = `${fhPrefix}${bowlerName} to ${batterName}, ${ball.wicketType || 'wicket'} appeal turned down — not out, ` +
+      (ball.extra === 'wd' ? 'the ball was a wide' : 'the ball was a no ball / Free Hit');
+  } else if(ball.isWicket){
+    txt = `${fhPrefix}${bowlerName} to ${batterName}, OUT! ${ball.wicketType || 'Wicket'}`;
   } else if(ball.extra === 'wd'){
-    txt = `${bowlerName}, wide${ball.batRuns ? ' +' + ball.batRuns : ''} (${teamRuns} run${teamRuns===1?'':'s'})`;
+    txt = `${fhPrefix}${bowlerName}, wide${ball.batRuns ? ' +' + ball.batRuns : ''} (${teamRuns} run${teamRuns===1?'':'s'})`;
   } else if(ball.extra === 'nb'){
-    txt = `${bowlerName}, no ball${ball.batRuns ? ' +' + ball.batRuns : ''} (${teamRuns} run${teamRuns===1?'':'s'})`;
+    txt = `${fhPrefix}${bowlerName}, no ball${ball.batRuns ? ' +' + ball.batRuns : ''} (${teamRuns} run${teamRuns===1?'':'s'})`;
   } else if(ball.extra === 'b'){
-    txt = `${bowlerName} to ${batterName}, ${ball.batRuns} bye${ball.batRuns===1?'':'s'}`;
+    txt = `${fhPrefix}${bowlerName} to ${batterName}, ${ball.batRuns} bye${ball.batRuns===1?'':'s'}`;
   } else if(ball.extra === 'lb'){
-    txt = `${bowlerName} to ${batterName}, ${ball.batRuns} leg bye${ball.batRuns===1?'':'s'}`;
+    txt = `${fhPrefix}${bowlerName} to ${batterName}, ${ball.batRuns} leg bye${ball.batRuns===1?'':'s'}`;
   } else if(ball.batRuns === 0){
-    txt = `${bowlerName} to ${batterName}, no run`;
+    txt = `${fhPrefix}${bowlerName} to ${batterName}, no run`;
   } else if(ball.batRuns === 4){
-    txt = `${bowlerName} to ${batterName}, FOUR!`;
+    txt = `${fhPrefix}${bowlerName} to ${batterName}, FOUR!`;
   } else if(ball.batRuns === 6){
-    txt = `${bowlerName} to ${batterName}, SIX!`;
+    txt = `${fhPrefix}${bowlerName} to ${batterName}, SIX!`;
   } else {
-    txt = `${bowlerName} to ${batterName}, ${ball.batRuns} run${ball.batRuns===1?'':'s'}`;
+    txt = `${fhPrefix}${bowlerName} to ${batterName}, ${ball.batRuns} run${ball.batRuns===1?'':'s'}`;
   }
   match.commentary.unshift({ ov: ballNo, txt, m: marker });
   if(match.commentary.length > 60) match.commentary.length = 60;
