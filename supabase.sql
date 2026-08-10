@@ -3,6 +3,15 @@
 --
 -- Run in: Supabase dashboard -> SQL Editor -> New query -> paste -> Run.
 --
+-- The ENTIRE file is safe to paste and run again at any time, on a database
+-- that already has some or all of it applied: every CREATE TABLE uses
+-- IF NOT EXISTS, every ALTER TABLE ADD COLUMN uses IF NOT EXISTS, every
+-- CREATE FUNCTION is CREATE OR REPLACE, every CREATE POLICY is preceded by a
+-- matching DROP POLICY IF EXISTS, and the realtime publication line is
+-- wrapped to ignore "already a member" errors. If you're ever unsure whether
+-- your project has the latest schema, just run the whole file again — that's
+-- the recommended way to pick up new migrations, not just the newest block.
+--
 -- This replaces firestore.rules (kept in the repo for reference only, no
 -- longer authoritative once you've run this). Same data model, same access
 -- rules, just expressed for Postgres:
@@ -38,6 +47,7 @@ create table if not exists public.admins (
 
 alter table public.admins enable row level security;
 
+drop policy if exists "admin list is readable so the app can show the admin tab" on public.admins;
 create policy "admin list is readable so the app can show the admin tab"
   on public.admins for select
   using (auth.role() = 'authenticated');
@@ -92,17 +102,20 @@ create table if not exists public.profiles (
 
 alter table public.profiles enable row level security;
 
+drop policy if exists "profiles are readable by any signed-in user" on public.profiles;
 create policy "profiles are readable by any signed-in user"
   on public.profiles for select
   using (auth.role() = 'authenticated');
 
 -- Nobody may create their own profile already flagged organiser/admin.
+drop policy if exists "users can create their own profile" on public.profiles;
 create policy "users can create their own profile"
   on public.profiles for insert
   with check (auth.uid() = id and is_admin = false and is_organiser = false);
 
 -- Owner may edit their own presentation, but never their own handle or roles.
 -- Admins may edit anything (that's how organiser/admin status is granted).
+drop policy if exists "owner can update their own profile, admin can update any" on public.profiles;
 create policy "owner can update their own profile, admin can update any"
   on public.profiles for update
   using (auth.uid() = id or public.is_admin())
@@ -120,6 +133,7 @@ create policy "owner can update their own profile, admin can update any"
     )
   );
 
+drop policy if exists "owner or admin can delete a profile" on public.profiles;
 create policy "owner or admin can delete a profile"
   on public.profiles for delete
   using (auth.uid() = id or public.is_admin());
@@ -201,6 +215,7 @@ begin
       alter table public.%1$I enable row level security;
     $f$, t);
 
+    execute format('drop policy if exists "owner has full access" on public.%1$I;', t);
     execute format(
       'create policy "owner has full access" on public.%1$I for all using (user_id = auth.uid()) with check (user_id = auth.uid());',
       t
@@ -212,6 +227,7 @@ begin
     -- device. Admins can SELECT any row here, never write/delete another
     -- user's data (no admin bypass on insert/update/delete — the "owner has
     -- full access" policy above is still the only write path).
+    execute format('drop policy if exists "admin can read all rows" on public.%1$I;', t);
     execute format(
       'create policy "admin can read all rows" on public.%1$I for select using (public.is_admin());',
       t
@@ -238,10 +254,12 @@ create table if not exists public.connections (
 
 alter table public.connections enable row level security;
 
+drop policy if exists "members or admin can read a connection" on public.connections;
 create policy "members or admin can read a connection"
   on public.connections for select
   using (auth.uid() = any(members) or public.is_admin());
 
+drop policy if exists "either member can send a request" on public.connections;
 create policy "either member can send a request"
   on public.connections for insert
   with check (
@@ -252,6 +270,7 @@ create policy "either member can send a request"
     and members[1] <> members[2]
   );
 
+drop policy if exists "members or admin can delete a connection" on public.connections;
 create policy "members or admin can delete a connection"
   on public.connections for delete
   using (auth.uid() = any(members) or public.is_admin());
@@ -310,20 +329,24 @@ create table if not exists public.organiser_applications (
 
 alter table public.organiser_applications enable row level security;
 
+drop policy if exists "applicant or admin can read an application" on public.organiser_applications;
 create policy "applicant or admin can read an application"
   on public.organiser_applications for select
   using (uid = auth.uid() or public.is_admin());
 
+drop policy if exists "a signed-in user can apply" on public.organiser_applications;
 create policy "a signed-in user can apply"
   on public.organiser_applications for insert
   with check (uid = auth.uid() and status = 'pending');
 
 -- Approve/reject are admin-only and go through the functions below so the
 -- profile flag and the application status can never drift out of sync.
+drop policy if exists "admin can update an application" on public.organiser_applications;
 create policy "admin can update an application"
   on public.organiser_applications for update
   using (public.is_admin());
 
+drop policy if exists "admin can delete an application" on public.organiser_applications;
 create policy "admin can delete an application"
   on public.organiser_applications for delete
   using (public.is_admin());
@@ -388,13 +411,24 @@ create table if not exists public.live_matches (
 
 alter table public.live_matches enable row level security;
 
+drop policy if exists "anyone can read a live match" on public.live_matches;
 create policy "anyone can read a live match" on public.live_matches for select using (true);
+drop policy if exists "owner can insert their live match" on public.live_matches;
 create policy "owner can insert their live match" on public.live_matches for insert with check (user_id = auth.uid());
+drop policy if exists "owner can update their live match" on public.live_matches;
 create policy "owner can update their live match" on public.live_matches for update using (user_id = auth.uid());
+drop policy if exists "owner or admin can delete a live match" on public.live_matches;
 create policy "owner or admin can delete a live match" on public.live_matches for delete using (user_id = auth.uid() or public.is_admin());
 
--- Realtime: let the live viewer subscribe to score updates.
-alter publication supabase_realtime add table public.live_matches;
+-- Realtime: let the live viewer subscribe to score updates. Adding a table
+-- that's already a publication member throws (SQLSTATE 42710), so this is
+-- wrapped to stay safe to run again.
+do $$
+begin
+  alter publication supabase_realtime add table public.live_matches;
+exception
+  when duplicate_object then null;
+end $$;
 
 -- ---------------------------------------------------------------------------
 -- MIGRATION — location fields on profiles (country / region / district /
@@ -600,6 +634,7 @@ create table if not exists public.feedback (
 
 alter table public.feedback enable row level security;
 
+drop policy if exists "user can submit their own feedback" on public.feedback;
 create policy "user can submit their own feedback"
   on public.feedback for insert
   with check (user_id = auth.uid());
@@ -608,6 +643,7 @@ create policy "user can submit their own feedback"
 -- costs nothing and enables a future "your feedback" view with no schema
 -- change); admins can see everyone's. Nobody but admin can ever read
 -- another user's feedback.
+drop policy if exists "user can read own feedback, admin can read all" on public.feedback;
 create policy "user can read own feedback, admin can read all"
   on public.feedback for select
   using (user_id = auth.uid() or public.is_admin());
@@ -615,6 +651,7 @@ create policy "user can read own feedback, admin can read all"
 -- Only admin can change status/reviewed_* — a submitter can never edit or
 -- withdraw their own feedback after sending it (matches "permanent record"
 -- treatment used elsewhere, e.g. organiser_applications).
+drop policy if exists "only admin can update feedback" on public.feedback;
 create policy "only admin can update feedback"
   on public.feedback for update
   using (public.is_admin())
