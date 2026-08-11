@@ -8,7 +8,7 @@
 import {
   createMatch, playBall, startSecondInnings, finishMatch, closeInnings,
   curInnings, teamName, fmtOvers, runRate, swapStrike, chaseInfo,
-  bowlerEcon, strikeRate, newBowler, makeId, inningsLine, topPerformers,
+  bowlerEcon, strikeRate, newBowler, makeId, inningsLine,
   currentPartnership, lastOvers, recentRuns, projectedScore, tossText,
   playerOfTheMatch, createSuperOver,
   maxOversPerBowler, bowlerRemaining, bowlerExhausted, eligibleBowlers,
@@ -120,6 +120,7 @@ const STALE_WARN_SECONDS = 90;     // 🟡 no update for a couple of minutes
 const STALE_DANGER_SECONDS = 300;  // 🔴 potentially stale
 let liveNowMatches = [];      // [{ id, match, location, updatedAt }] — currently-live, all users
 let liveNowFilter = '';
+let liveNowFormat = 'all';    // 'all' | '10' | '20' | '50' | 'other' — derived from real oversLimit, not a stored field
 let liveNowUnsub = null;      // realtime unsubscribe for the Live Now screen
 let onlineCount = null;       // live presence count, shown on the admin dashboard
 let onlineUnsub = null;
@@ -491,6 +492,27 @@ function renderProfile(){
   }
   $('goAdminBtn').classList.toggle('hidden', !isAdminUser);
   $('feedbackCard').classList.toggle('hidden', !isSignedIn());
+
+  // Organiser Progress — real count of this organiser's own tournaments that
+  // have genuinely finished (deriveStatus checks tournamentChampion(t), not
+  // just the possibly-stale stored status column). `tournaments` is already
+  // owner-scoped by fetchTournaments()'s RLS filter, so no extra filtering
+  // by user id is needed here. Progress-only: never implies eligibility for
+  // the future Lucky Draw, which will be decided server-side once it exists.
+  const opCard = $('organiserProgressCard');
+  if(opCard){
+    opCard.classList.toggle('hidden', !isOrganiser);
+    if(isOrganiser){
+      const OP_TARGET = 10;
+      const completedCount = tournaments.filter(t=>deriveStatus(t, t.status) === 'completed').length;
+      const capped = Math.min(completedCount, OP_TARGET);
+      $('opCount').textContent = `${completedCount} / ${OP_TARGET} Successful Tournaments`;
+      $('opFill').style.width = `${(capped / OP_TARGET) * 100}%`;
+      $('opNote').textContent = completedCount >= OP_TARGET
+        ? "You've reached 10 completed tournaments — Lucky Draw entry will open here once it launches."
+        : `${OP_TARGET - completedCount} more completed tournament${OP_TARGET - completedCount === 1 ? '' : 's'} to reach the Lucky Draw milestone.`;
+    }
+  }
 
   // Identity should be unambiguous about elevated access, not just a hidden
   // "Admin dashboard" button an admin might miss — shown here regardless of
@@ -1671,6 +1693,25 @@ function renderHome(){
   $('homeGuestCta').classList.toggle('hidden', !!u);
 }
 
+/* Skeleton placeholders — shown while a section is fetching real data, so
+   the layout doesn't jump once actual cards/rows replace them. Pure markup
+   built from the existing shimmer `.skeleton` bar; contains no data, fake
+   or otherwise, and never lingers past the real fetch resolving. */
+function skeletonRail(count = 4){
+  return `<div class="skeleton-rail">` +
+    Array.from({ length: count }).map(()=>`<div class="skeleton-card">
+      <div class="skeleton" style="width:70%;"></div>
+      <div class="skeleton" style="width:45%;"></div>
+    </div>`).join('') + `</div>`;
+}
+function skeletonRows(count = 3){
+  return Array.from({ length: count }).map(()=>`<div class="skeleton-row">
+    <div class="skeleton" style="width:55%;"></div>
+    <div class="skeleton" style="width:85%;"></div>
+    <div class="skeleton" style="width:35%;"></div>
+  </div>`).join('');
+}
+
 function renderHomeTournaments(){
   const box = $('homeTournamentsRail');
   if(!tournaments.length){
@@ -1692,6 +1733,31 @@ function renderHomeTournaments(){
 
 const TOUR_FORMAT_LABEL = { 'league-knockout':'League + knockouts', 'league':'League table', 'knockout':'Knockout' };
 
+/* Real match format, derived from the match's own oversLimit (the same
+   value the setup screen's "Overs per innings" select writes) — not a
+   separate stored field, and not the tape-ball/hard-ball ball-type the
+   app has no data for (there's no such field anywhere in the schema, so
+   that filter isn't offered — see the Live Now format filter below). */
+function matchFormatKey(oversLimit){
+  if(oversLimit === 10) return '10';
+  if(oversLimit === 20) return '20';
+  if(oversLimit === 50) return '50';
+  return 'other';
+}
+const MATCH_FORMAT_LABEL = { '10':'T10', '20':'T20', '50':'ODI', 'other':'Other' };
+
+/* Best-effort tournament-id -> name lookup for live match cards. Not a new
+   query — just remembers whatever tournaments this device has already
+   loaded (the signed-in organiser's own list, plus whatever's shown in
+   Upcoming Tournaments). A live match whose tournament isn't in either of
+   those simply shows no tournament name, per the brief's "if data is
+   unavailable, gracefully hide that field" — better than a second fetch
+   per live card or a guessed name. */
+const tournamentNameCache = {};
+function seedTournamentNameCache(list){
+  (list || []).forEach(t=>{ if(t && t.id && t.name) tournamentNameCache[t.id] = t.name; });
+}
+
 /* "Upcoming Tournaments" — public tournaments other organisers marked
    public (fetchPublicTournaments, existing RLS-backed read, no schema
    change). Card shows every field the brief asks for: name, status, date,
@@ -1705,25 +1771,67 @@ async function renderUpcomingTournaments(){
     box.innerHTML = `<div class="empty-note">Tournament discovery needs the cloud connection. In local-only mode there's no way to see other organisers' tournaments.</div>`;
     return;
   }
-  box.innerHTML = `<div class="stat-dim">Loading…</div>`;
+  box.innerHTML = skeletonRows(3);
   let list = [];
   let failed = false;
-  try{ list = await fetchPublicTournaments(6); }
+  // Fetch a larger pool than we display here (6) because "Cricket Near You"
+  // below reuses this same list for its region/district text match rather
+  // than firing a second query — best-effort coverage, not a second round trip.
+  try{ list = await fetchPublicTournaments(24); }
   catch(e){ console.error('renderUpcomingTournaments failed:', e); failed = true; }
+  seedTournamentNameCache(list);
+  seedTournamentNameCache(tournaments);
   if(!box.isConnected) return; // screen changed while awaiting
+  renderCricketNearYou(failed ? [] : list);
   if(failed){
     box.innerHTML = `<div class="empty-note">Couldn't load tournaments right now.
       <button class="btn secondary small" data-retry>Try again</button></div>`;
     box.querySelector('[data-retry]').addEventListener('click', renderUpcomingTournaments);
     return;
   }
-  if(!list.length){
+  const shown = list.slice(0, 6);
+  if(!shown.length){
     box.innerHTML = `<div class="empty-note">No tournaments found nearby yet.<br>
       When an organiser marks one public, it'll show up here.
       <button class="btn secondary small" data-action="open-new-tournament">Start one yourself</button></div>`;
     return;
   }
-  box.innerHTML = list.map(t=>`
+  box.innerHTML = shown.map(t=>`
+    <button class="tour-card" data-action="open-tour" data-id="${esc(t.id)}" style="width:100%;text-align:left;font-family:inherit;">
+      ${dateChipHTML(t.startDate)}
+      <div class="tc-b">
+        <div class="tc-n">${esc(t.name)}</div>
+        <div class="tc-m">${fmtDateRange(t.startDate, t.endDate) || 'Date TBC'}${t.location ? ' &middot; ' + esc(t.location) : ''}</div>
+        <div class="tc-m">${TOUR_FORMAT_LABEL[t.format] || 'League'} &middot; ${(t.teams || []).length} team${(t.teams || []).length === 1 ? '' : 's'}</div>
+      </div>
+      ${statusBadgeHTML(t.status || 'upcoming')}
+    </button>`).join('');
+}
+
+/* "Cricket Near You" — best-effort text match, not real geodistance or a
+   browser location prompt. Compares the signed-in user's own region/
+   district (typed on the Account screen) against each public tournament's
+   free-text location field, reusing the list renderUpcomingTournaments()
+   just fetched. No match, no signed-in user, or no region/district set on
+   the profile all mean the same thing here: stay hidden. Never invents a
+   distance figure or falls back to showing unrelated tournaments. */
+function renderCricketNearYou(list){
+  const card = $('homeNearYouCard');
+  if(!card) return;
+  const u = getUser();
+  const region = (profile.region || (myPublicProfile && myPublicProfile.region) || '').trim();
+  const district = (profile.district || (myPublicProfile && myPublicProfile.district) || '').trim();
+  const terms = [district, region].filter(Boolean);
+  if(!u || !terms.length){ card.classList.add('hidden'); return; }
+  const matches = (list || []).filter(t=>{
+    const loc = (t.location || '').toLowerCase().trim();
+    if(!loc) return false;
+    return terms.some(term=>loc.includes(term.toLowerCase()));
+  }).slice(0, 5);
+  if(!matches.length){ card.classList.add('hidden'); return; }
+  card.classList.remove('hidden');
+  $('homeNearYouSub').textContent = `Matched to ${terms.join(', ')}`;
+  $('homeNearYouBox').innerHTML = matches.map(t=>`
     <button class="tour-card" data-action="open-tour" data-id="${esc(t.id)}" style="width:100%;text-align:left;font-family:inherit;">
       ${dateChipHTML(t.startDate)}
       <div class="tc-b">
@@ -1752,9 +1860,17 @@ function homeLiveCardHTML(r){
   };
   const cur = (m.innings && m.innings[m.currentInningsIdx]) || null;
   const oversNote = cur ? fmtOvers(cur.legalBalls) + ' overs' : '';
+  // Current run rate — real, computed from this innings' own runs/legalBalls
+  // (engine.js runRate), not a separate stat. Only shown once at least one
+  // legal ball has been bowled (runRate guards divide-by-zero anyway, but a
+  // "0.00" badge before a ball's been bowled isn't useful information).
+  const crrNote = cur && cur.legalBalls > 0 ? 'CRR ' + runRate(cur.runs, cur.legalBalls) : '';
+  // Tournament name, only when this device already knows it (see
+  // tournamentNameCache above) — never a second query just for this label.
+  const tourName = m.tournamentId ? tournamentNameCache[m.tournamentId] : null;
   return `<a class="live-card" href="./live.html?m=${esc(r.id)}" target="_blank" rel="noopener">
     <div class="lc-top">
-      <span class="lc-comp">${esc(r.location || 'Live match')}</span>
+      <span class="lc-comp">${tourName ? esc(tourName) + (r.location ? ' &middot; ' + esc(r.location) : '') : esc(r.location || 'Live match')}</span>
       <span class="badge-live"><i></i>LIVE</span>
     </div>
     <div class="lc-teams">
@@ -1768,7 +1884,9 @@ function homeLiveCardHTML(r){
         <div class="lcs-n">${esc(m.teamB || 'Team B')}</div><div class="lcs-s">${esc(scoreFor('B'))}</div>
       </div>
     </div>
-    ${oversNote ? `<div class="lc-note">${esc(oversNote)}<span class="lc-arrow">&#8250;</span></div>` : `<div class="lc-note lc-note-arrow-only"><span class="lc-arrow">&#8250;</span></div>`}
+    ${oversNote
+      ? `<div class="lc-note">${esc(oversNote)}${crrNote ? ' &middot; ' + esc(crrNote) : ''}<span class="lc-arrow">&#8250;</span></div>`
+      : `<div class="lc-note lc-note-arrow-only"><span class="lc-arrow">&#8250;</span></div>`}
   </a>`;
 }
 async function renderHomeLiveMatches(){
@@ -1778,7 +1896,7 @@ async function renderHomeLiveMatches(){
     box.innerHTML = `<div class="empty-note">Live match discovery needs the cloud connection.</div>`;
     return;
   }
-  box.innerHTML = `<div class="stat-dim">Loading…</div>`;
+  box.innerHTML = skeletonRail(3);
   let rows = [];
   let failed = false;
   try{ rows = await fetchLiveMatchesNow(); }
@@ -1795,6 +1913,7 @@ async function renderHomeLiveMatches(){
       Start one yourself and turn on <b>Share Live</b> during setup.</div>`;
     return;
   }
+  seedTournamentNameCache(tournaments);
   box.innerHTML = `<div class="live-rail">` + rows.slice(0, 6).map(homeLiveCardHTML).join('') + `</div>`;
 }
 
@@ -1816,7 +1935,7 @@ async function renderHomeTopPlayers(){
     box.innerHTML = `<div class="empty-note">Top players needs the cloud connection.</div>`;
     return;
   }
-  box.innerHTML = `<div class="stat-dim">Loading…</div>`;
+  box.innerHTML = skeletonRail(5);
   let rows = [];
   let failed = false;
   try{ rows = await fetchTopPlayers(10); }
@@ -1923,22 +2042,34 @@ function renderEventsWidget(){
   }).join('');
 }
 
+/* Recent Results — every field here comes straight off the completed match
+   object itself: both innings' real score lines (inningsLine), the real
+   result text finishMatch() computed, and a real Player of the Match pick
+   (playerOfTheMatch — a deterministic points formula over this match's own
+   ball-by-ball stats, not an invented "star of the match" label). Nothing
+   here is fabricated to fill space; an empty history shows a clean empty
+   state instead. */
 function renderRecent(){
   const all = mergedHistory().filter(m=>m.completed).slice(0,4);
   const box = $('recentResults');
   if(!all.length){ box.innerHTML = '<div class="empty-note">No completed matches yet.</div>'; return; }
   box.innerHTML = all.map(m=>{
-    const perf = topPerformers(m);
-    const bits = [];
-    if(perf.topBat) bits.push(perf.topBat.name + ' ' + perf.topBat.runs + '(' + perf.topBat.balls + ')');
-    if(perf.topBowl && perf.topBowl.wickets > 0) bits.push(perf.topBowl.name + ' ' + perf.topBowl.wickets + '/' + perf.topBowl.runs);
+    const potm = (m.innings && m.innings.length) ? playerOfTheMatch(m) : null;
+    const scoreLines = (m.innings || []).map((inn, i)=>{
+      const line = inningsLine(m, i);
+      return line ? `<div class="d">${esc(line)}</div>` : '';
+    }).join('');
     return `<div class="hist-item" data-action="view-history" data-id="${esc(m.id)}">
       <div style="min-width:0;">
         <div class="batter-name">${esc(m.teamA)} v ${esc(m.teamB)}</div>
-        <div class="d">${esc(m.resultText || '')}</div>
-        ${bits.length ? `<div class="d" style="color:var(--gold-soft);">${esc(bits.join(' · '))}</div>` : ''}
+        ${scoreLines}
+        <div class="d" style="color:var(--acc-2);font-weight:600;">${esc(m.resultText || '')}</div>
+        ${potm ? `<div class="d" style="color:var(--gold-soft);">POTM: ${esc(potm.name)}${potm.line ? ' · ' + esc(potm.line) : ''}</div>` : ''}
       </div>
-      <div class="d">${m.createdAt ? new Date(m.createdAt).toLocaleDateString() : ''}</div>
+      <div style="text-align:right;flex-shrink:0;">
+        <div class="d">${m.createdAt ? new Date(m.createdAt).toLocaleDateString() : ''}</div>
+        <div class="d" style="color:var(--acc-2);margin-top:4px;">Scorecard &#8250;</div>
+      </div>
     </div>`;
   }).join('');
 }
@@ -2945,7 +3076,7 @@ function fmtDateRange(startDate, endDate){
 
 async function renderLiveNow(){
   const box = $('liveNowList');
-  box.innerHTML = '<div class="empty-note">Loading live matches&hellip;</div>';
+  box.innerHTML = skeletonRows(4);
   liveNowMatches = await fetchLiveMatchesNow();
   if(!liveNowUnsub){
     liveNowUnsub = watchAllLiveMatches(()=>{ if(screen === 'live-now') renderLiveNow(); });
@@ -2956,8 +3087,14 @@ async function renderLiveNow(){
 function paintLiveNowList(){
   const box = $('liveNowList');
   if(!box) return;
+  document.querySelectorAll('#liveNowFormatTabs .pill').forEach(p=>
+    p.classList.toggle('active', p.dataset.lnf === liveNowFormat));
+
   const q = liveNowFilter.trim().toLowerCase();
-  const rows = q ? liveNowMatches.filter(r=>(r.location || '').toLowerCase().includes(q)) : liveNowMatches;
+  let rows = q ? liveNowMatches.filter(r=>(r.location || '').toLowerCase().includes(q)) : liveNowMatches;
+  if(liveNowFormat !== 'all'){
+    rows = rows.filter(r=>matchFormatKey(r.match && r.match.oversLimit) === liveNowFormat);
+  }
 
   if(!liveNowMatches.length){
     box.innerHTML = `<div class="card"><div class="empty-note">
@@ -2966,29 +3103,20 @@ function paintLiveNowList(){
     return;
   }
   if(!rows.length){
+    const activeFilter = q ? `"${esc(liveNowFilter)}"` : MATCH_FORMAT_LABEL[liveNowFormat];
     box.innerHTML = `<div class="card"><div class="empty-note">
-      No live matches match "${esc(liveNowFilter)}".
-      <button class="icon-btn" id="liveNowClearFilter" style="margin-top:8px;">Clear filter</button>
+      No live matches match ${activeFilter}.
+      <button class="icon-btn" id="liveNowClearFilter" style="margin-top:8px;">Clear filters</button>
     </div></div>`;
     $('liveNowClearFilter').addEventListener('click', ()=>{
-      liveNowFilter = ''; $('liveNowAreaFilter').value = ''; paintLiveNowList();
+      liveNowFilter = ''; liveNowFormat = 'all';
+      $('liveNowAreaFilter').value = ''; paintLiveNowList();
     });
     return;
   }
 
-  box.innerHTML = rows.map(r=>{
-    const m = r.match;
-    const line = (m && m.innings && m.innings[m.currentInningsIdx]) ? inningsLine(m, m.currentInningsIdx) : '';
-    return `
-    <a class="card live-now-card" href="./live.html?m=${esc(r.id)}" target="_blank" rel="noopener" style="display:block;margin-bottom:10px;">
-      <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;">
-        <b>${esc((m && m.teamA) || 'Team A')} <span class="stat-dim">vs</span> ${esc((m && m.teamB) || 'Team B')}</b>
-        <span class="pill-live mini">LIVE</span>
-      </div>
-      <div style="margin-top:4px;">${esc(line)}</div>
-      <div class="stat-dim" style="margin-top:2px;">${r.location ? esc(r.location) : 'Venue not given'}</div>
-    </a>`;
-  }).join('');
+  seedTournamentNameCache(tournaments);
+  box.innerHTML = `<div class="live-now-stack">` + rows.map(homeLiveCardHTML).join('') + `</div>`;
 }
 
 /* ---------------- feedback ---------------- */
@@ -3716,6 +3844,8 @@ function bind(){
   $('qaHistory').addEventListener('click', ()=>go('history'));
   $('qaLiveNow').addEventListener('click', ()=>go('live-now'));
   $('liveNowAreaFilter').addEventListener('input', e=>{ liveNowFilter = e.target.value; paintLiveNowList(); });
+  document.querySelectorAll('#liveNowFormatTabs .pill').forEach(p=>
+    p.addEventListener('click', ()=>{ liveNowFormat = p.dataset.lnf; paintLiveNowList(); }));
 
   // setup
   $('setupBack').addEventListener('click', ()=>go('home'));
