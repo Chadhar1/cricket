@@ -77,6 +77,33 @@ body.app{user-select:none;}
 .icon-btn:active{background:rgba(248,197,57,0.18);}
 .icon-btn.on{background:var(--green); border-color:var(--green-2); color:#fff;}
 
+/* Notification bell — reused on the Home topbar button and the sidebar's
+   Notifications nav item (that one reuses .pill-live instead, see
+   sidenav .pill-live). Real unread count only; hidden entirely at 0 rather
+   than showing a bare "0". */
+.notif-bell{position:relative; padding:8px 10px;}
+.notif-bell svg{width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:1.9;
+  stroke-linecap:round;stroke-linejoin:round;display:block;}
+.notif-badge{
+  position:absolute; top:-3px; right:-3px; min-width:16px; height:16px; padding:0 4px;
+  border-radius:8px; background:var(--live); color:#fff; font-size:9.5px; font-weight:800;
+  display:flex; align-items:center; justify-content:center; line-height:1; border:2px solid var(--bg-1);
+}
+.notif-item.unread{border-color:var(--acc-2);}
+
+/* Admin compose form's live preview — a rough mock of what the push/in-app
+   notification will actually look like, so an admin isn't sending blind. */
+.notif-preview-card{
+  border:1px solid var(--line-2); border-radius:12px; padding:12px 14px;
+  background:var(--bg-1);
+}
+.npc-head{display:flex; align-items:center; gap:8px; font-size:12px; color:var(--ink-dim); margin-bottom:6px;}
+.npc-app{font-weight:700; letter-spacing:.3px;}
+.npc-title{font-size:14px; font-weight:700; color:var(--ink); margin-bottom:2px;}
+.npc-msg{font-size:13px; color:var(--ink-dim); line-height:1.4;}
+.npc-img{display:block; width:100%; max-height:160px; object-fit:cover; border-radius:8px; margin-top:8px;}
+.npc-action{margin-top:8px; font-size:12px; font-weight:700; color:var(--acc-2);}
+
 .hidden{display:none !important;}
 
 .card{

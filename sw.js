@@ -5,7 +5,7 @@
 
    After you deploy a change, bump VERSION so phones fetch the new files. */
 
-const VERSION = 'v11';
+const VERSION = 'v12';
 const CACHE = 'cricket-connect-' + VERSION;
 
 const SHELL = [
@@ -22,6 +22,7 @@ const SHELL = [
   './social.js',
   './privacy.html',
   './supabase-config.js',
+  './firebase-messaging-config.js',
   './manifest.json',
   './icon-192.png',
   './icon-512.png',
@@ -70,6 +71,60 @@ self.addEventListener('fetch', (event)=>{
       }
       const res = await network;
       return res || new Response('Offline', { status: 503, statusText: 'Offline' });
+    })
+  );
+});
+
+/* ---------------- push notifications ----------------
+   Deliberately no Firebase SDK loaded in here — once a browser has an FCM
+   registration token (obtained in app.js via firebase/messaging, see
+   initPushNotifications), the actual delivery to this service worker is
+   just the standard Web Push API. `event.data` is exactly the payload
+   built server-side in supabase/functions/_shared/fcm.ts's sendToDevice():
+   { notification: {title, body, image}, data: {notification_id, deep_link} }.
+   This app's *own* SW (this file) already controls the whole origin (see
+   the registration in index.html), so there's no separate
+   firebase-messaging-sw.js to keep in sync — one service worker, one place
+   this logic lives. */
+self.addEventListener('push', (event)=>{
+  if(!event.data) return;
+  let payload;
+  try{ payload = event.data.json(); }
+  catch(e){ payload = { notification: { title: 'Cricket Connect', body: event.data.text() } }; }
+
+  const n = payload.notification || {};
+  const data = payload.data || {};
+  const title = n.title || 'Cricket Connect';
+  const options = {
+    body: n.body || '',
+    icon: './icon-192.png',
+    badge: './icon-192.png',
+    image: n.image || undefined,
+    data: { deepLink: data.deep_link || './index.html', notificationId: data.notification_id || null },
+    tag: data.notification_id || undefined,  // replaces, rather than stacks, a re-delivered copy of the same notification
+    renotify: !!data.notification_id
+  };
+  event.waitUntil(self.registration.showNotification(title, options));
+});
+
+/* Focuses an already-open tab and hands it the deep link if one exists
+   (index.html's own boot() picks up ?tour=/?player=/?go=notifications the
+   same way it already handles every other deep link — nothing new to teach
+   it), otherwise opens a fresh one. Never opens a link this service worker
+   didn't itself construct from the push payload above. */
+self.addEventListener('notificationclick', (event)=>{
+  event.notification.close();
+  const deepLink = (event.notification.data && event.notification.data.deepLink) || './index.html';
+  event.waitUntil(
+    self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((clients)=>{
+      for(const client of clients){
+        if('focus' in client){
+          client.focus();
+          if('navigate' in client) client.navigate(deepLink).catch(()=>{});
+          return;
+        }
+      }
+      return self.clients.openWindow(deepLink);
     })
   );
 });

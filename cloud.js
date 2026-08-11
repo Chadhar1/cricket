@@ -821,6 +821,348 @@ export async function watchLiveMatch(matchId, onUpdate, onError){
   }catch(err){ onError && onError(err); return ()=>{}; }
 }
 
+/* ---------------- notifications: admin authoring + sending ----------------
+   Creating a notification row and sending it are deliberately two different
+   calls: createNotification() is a plain RLS-scoped insert (any admin can
+   already do this, no elevated access needed, and it's what makes "Save
+   notification history" true even for a draft that's never sent). Actually
+   delivering it — resolving the audience, fanning out recipient rows, and
+   calling FCM — needs the service role key and the FCM service account, so
+   that part runs entirely inside the send-notification Edge Function, never
+   in this file. See supabase/functions/send-notification. */
+
+export async function createNotification({
+  type, title, message, imageUrl, actionType, actionTarget,
+  audienceType, audienceFilter, templateId, scheduledAt
+}){
+  requireCloud();
+  if(!currentUser) throw Object.assign(new Error('Not signed in'), { code:'app/not-signed-in' });
+  const { data, error } = await sb.from('notifications').insert({
+    type: type || 'announcement',
+    title: (title || '').trim(),
+    message: (message || '').trim(),
+    image_url: imageUrl || null,
+    action_type: actionType || 'none',
+    action_target: actionTarget || null,
+    audience_type: audienceType,
+    audience_filter: audienceFilter || {},
+    template_id: templateId || null,
+    created_by: currentUser.id,
+    status: scheduledAt ? 'scheduled' : 'draft',
+    scheduled_at: scheduledAt || null
+  }).select().maybeSingle();
+  if(error) throw error;
+  return toAppNotification(data);
+}
+
+/* Admin-only preview count ("Send this notification to 12,450 users?") —
+   calls the same resolve_notification_audience() the database itself uses
+   as the source of truth, so the number shown before sending can never
+   drift from who actually receives it. */
+export async function previewAudienceCount(audienceType, audienceFilter){
+  requireCloud();
+  const { data, error } = await sb.rpc('resolve_notification_audience', {
+    p_audience_type: audienceType, p_filter: audienceFilter || {}
+  });
+  if(error) throw error;
+  return (data || []).length;
+}
+
+/* Hands off to the Edge Function, which is the only thing in the system
+   holding the service role key + FCM credentials. supabase-js automatically
+   forwards the caller's own session as the Authorization header, which is
+   what the function re-verifies server-side before doing anything — this
+   call carries no special privilege of its own, it just asks. */
+export async function sendNotificationNow(notificationId){
+  requireCloud();
+  const { data, error } = await sb.functions.invoke('send-notification', {
+    body: { notification_id: notificationId }
+  });
+  if(error) throw error;
+  return data;
+}
+
+export async function cancelScheduledNotification(id){
+  requireCloud();
+  const { error } = await sb.from('notifications')
+    .update({ status: 'cancelled', updated_at: new Date().toISOString() })
+    .eq('id', id).eq('status', 'scheduled');
+  if(error){ console.error('cancelScheduledNotification failed:', error); return false; }
+  return true;
+}
+
+function toAppNotification(r){
+  return {
+    id: r.id, type: r.type, title: r.title, message: r.message, imageUrl: r.image_url,
+    actionType: r.action_type, actionTarget: r.action_target,
+    audienceType: r.audience_type, audienceFilter: r.audience_filter || {},
+    templateId: r.template_id, createdBy: r.created_by, status: r.status,
+    scheduledAt: r.scheduled_at, sentAt: r.sent_at,
+    recipientsTotal: r.recipients_total, pushSubmitted: r.push_submitted, pushFailed: r.push_failed,
+    errorMessage: r.error_message, createdAt: r.created_at
+  };
+}
+
+/* History tab — admin can see every notification via RLS ("admin or
+   recipient can read a notification"); ordinary users only ever see their
+   own via fetchMyNotifications() below, never this. */
+export async function fetchNotificationHistory(max = 100){
+  if(!ready) return [];
+  const { data, error } = await sb.from('notifications')
+    .select('*').order('created_at', { ascending: false }).limit(max);
+  if(error){ console.error('fetchNotificationHistory failed:', error); throw error; }
+  return data.map(toAppNotification);
+}
+
+/* Admin dashboard summary card. Deliberately several small real counts
+   rather than one invented "engagement score" — sent-this-month and
+   scheduled come straight from `notifications` (admin can read every row);
+   active devices goes through count_registered_devices() since
+   notification_devices itself has no admin read policy (raw tokens stay
+   owner-only) — see that function's comment in supabase.sql. */
+export async function fetchNotificationStats(){
+  if(!ready) return { total:0, sentThisMonth:0, scheduled:0, activeDevices:0, lastBroadcast:null };
+  const monthAgo = new Date(Date.now() - 30*24*60*60*1000).toISOString();
+  const [totalRes, sentRes, scheduledRes, devicesRes, lastRes] = await Promise.all([
+    sb.from('notifications').select('id', { count:'exact', head:true }),
+    sb.from('notifications').select('id', { count:'exact', head:true }).eq('status','sent').gte('sent_at', monthAgo),
+    sb.from('notifications').select('id', { count:'exact', head:true }).eq('status','scheduled'),
+    sb.rpc('count_registered_devices'),
+    sb.from('notifications').select('title, sent_at').eq('status','sent').order('sent_at',{ ascending:false }).limit(1).maybeSingle()
+  ]);
+  return {
+    total: totalRes.count || 0,
+    sentThisMonth: sentRes.count || 0,
+    scheduled: scheduledRes.count || 0,
+    activeDevices: devicesRes.data || 0,
+    lastBroadcast: lastRes.data || null
+  };
+}
+
+/* ---------------- notifications: templates ---------------- */
+
+export async function fetchNotificationTemplates(){
+  if(!ready) return [];
+  const { data, error } = await sb.from('notification_templates').select('*').order('name');
+  if(error){ console.error('fetchNotificationTemplates failed:', error); return []; }
+  return data.map(t=>({
+    id: t.id, name: t.name, type: t.type, titleTemplate: t.title_template,
+    messageTemplate: t.message_template, actionType: t.action_type
+  }));
+}
+
+export async function saveNotificationTemplate({ id, name, type, titleTemplate, messageTemplate, actionType }){
+  requireCloud();
+  const row = {
+    name: (name || '').trim(), type: type || 'announcement',
+    title_template: (titleTemplate || '').trim(), message_template: (messageTemplate || '').trim(),
+    action_type: actionType || 'none', created_by: currentUser ? currentUser.id : null
+  };
+  if(id) row.id = id;
+  const { data, error } = await sb.from('notification_templates').upsert(row).select().maybeSingle();
+  if(error) throw error;
+  return data;
+}
+
+export async function deleteNotificationTemplate(id){
+  if(!ready) return false;
+  const { error } = await sb.from('notification_templates').delete().eq('id', id);
+  if(error){ console.error('deleteNotificationTemplate failed:', error); return false; }
+  return true;
+}
+
+/* ---------------- notifications: the signed-in user's own inbox ----------------
+   Everything below is scoped by notification_recipients' own RLS (owner or
+   admin) — no special access, same trust level as any other "my data" read
+   elsewhere in this file. */
+
+function toAppNotificationItem(r){
+  const n = r.notifications || {};
+  return {
+    recipientId: r.id, notificationId: r.notification_id,
+    readAt: r.read_at, dismissedAt: r.dismissed_at, receivedAt: r.created_at,
+    type: n.type, title: n.title, message: n.message, imageUrl: n.image_url,
+    actionType: n.action_type, actionTarget: n.action_target
+  };
+}
+
+export async function fetchMyNotifications(max = 50){
+  if(!ready || !currentUser) return [];
+  const { data, error } = await sb.from('notification_recipients')
+    .select('id, notification_id, read_at, dismissed_at, created_at, notifications(type, title, message, image_url, action_type, action_target)')
+    .eq('user_id', currentUser.id)
+    .is('dismissed_at', null)
+    .order('created_at', { ascending: false })
+    .limit(max);
+  if(error){ console.error('fetchMyNotifications failed:', error); return []; }
+  return data.map(toAppNotificationItem);
+}
+
+export async function fetchUnreadNotificationCount(){
+  if(!ready || !currentUser) return 0;
+  const { count, error } = await sb.from('notification_recipients')
+    .select('id', { count:'exact', head:true })
+    .eq('user_id', currentUser.id).is('read_at', null).is('dismissed_at', null);
+  if(error){ console.error('fetchUnreadNotificationCount failed:', error); return 0; }
+  return count || 0;
+}
+
+export async function markNotificationRead(recipientId){
+  if(!ready || !currentUser) return false;
+  const { error } = await sb.from('notification_recipients')
+    .update({ read_at: new Date().toISOString() }).eq('id', recipientId).eq('user_id', currentUser.id);
+  if(error){ console.error('markNotificationRead failed:', error); return false; }
+  return true;
+}
+
+export async function markAllNotificationsRead(){
+  if(!ready || !currentUser) return false;
+  const { error } = await sb.from('notification_recipients')
+    .update({ read_at: new Date().toISOString() })
+    .eq('user_id', currentUser.id).is('read_at', null);
+  if(error){ console.error('markAllNotificationsRead failed:', error); return false; }
+  return true;
+}
+
+export async function dismissNotification(recipientId){
+  if(!ready || !currentUser) return false;
+  const { error } = await sb.from('notification_recipients')
+    .update({ dismissed_at: new Date().toISOString() }).eq('id', recipientId).eq('user_id', currentUser.id);
+  if(error){ console.error('dismissNotification failed:', error); return false; }
+  return true;
+}
+
+/* Live badge updates while the app is open in a tab — push (FCM) is what
+   wakes a closed/backgrounded app; this just covers "already looking at
+   the app right now, in another tab, when a notification lands". */
+export function watchMyNotifications(onChange){
+  if(!ready || !currentUser) return ()=>{};
+  const channel = sb.channel('my_notifications_' + currentUser.id)
+    .on('postgres_changes',
+      { event: '*', schema: 'public', table: 'notification_recipients', filter: `user_id=eq.${currentUser.id}` },
+      onChange
+    ).subscribe();
+  return ()=>sb.removeChannel(channel);
+}
+
+/* ---------------- notifications: device token registration ----------------
+   Web Push registration itself (asking the browser for permission, getting
+   a token from Firebase Messaging) happens in app.js — this file only ever
+   sees the resulting token string, never Firebase credentials. */
+
+export async function registerDeviceToken({ token, platform, deviceLabel }){
+  if(!ready || !currentUser || !token) return false;
+  const { error } = await sb.from('notification_devices').upsert({
+    fcm_token: token, user_id: currentUser.id, platform: platform || 'web',
+    device_label: (deviceLabel || '').slice(0, 120), last_seen: new Date().toISOString(),
+    updated_at: new Date().toISOString()
+  }, { onConflict: 'fcm_token' });
+  if(error){ console.error('registerDeviceToken failed:', error); return false; }
+  return true;
+}
+
+/* Called on sign-out for the current browser's own token, so a device that
+   logged out stops receiving that account's pushes. Other devices/accounts
+   are untouched. */
+export async function removeDeviceToken(token){
+  if(!ready || !token) return false;
+  const { error } = await sb.from('notification_devices').delete().eq('fcm_token', token);
+  if(error){ console.error('removeDeviceToken failed:', error); return false; }
+  return true;
+}
+
+/* ---------------- notifications: automated cricket-event hooks ----------------
+   Architecture-only, per the "future automated cricket notifications" brief.
+   ONE of these is actually wired live (notifyOrganiserApplicationApproved,
+   called from app.js's approveApp()) because it's the only event in this app
+   that has BOTH a real trigger AND a real, spam-free, single-recipient
+   audience — the applicant themselves.
+
+   The rest (match started/completed, wicket, tournament starting, team
+   qualified, match reminder) do NOT have a resolvable real audience yet:
+   this schema has no "match followers" / "tournament subscribers" table (see
+   the Task 142 plan for why "team members" / "tournament followers"
+   audience-targeting was excluded from the admin composer for the same
+   reason), so firing one automatically today could only ever legitimately
+   target 'all', which would spam every user on every casual match anyone
+   scores. That's exactly the "do NOT implement fake events" / anti-spam
+   trap the brief warns about, so these stay defined-but-uncalled: real
+   templates, real trigger points are commented at their call sites in
+   app.js, gated behind AUTO_CRICKET_NOTIFICATIONS (see app.js), OFF by
+   default. Turning one on for real means first deciding a real audience
+   (e.g. wire it to 'all' deliberately for a tournament final, or build a
+   followers table and target 'selected' with real subscriber ids) — never
+   flip the flag without making that audience decision first.
+
+   tournament_starting / match_reminder additionally can't be triggered from
+   client-side JS at all — nothing keeps a browser tab open at the moment a
+   tournament is scheduled to start. Those need the same server-side
+   scheduled-dispatch mechanism already documented in supabase.sql for
+   scheduled admin notifications (pg_cron + pg_net calling a "check what's
+   starting soon" Edge Function) — there's no client-side hook for them to
+   attach to, hence no stub function below for those two. */
+
+/* The one live-wired hook: notifies the applicant, and only the applicant,
+   the moment an admin approves their organiser application. Real trigger
+   (approveOrganiserApplication succeeding), real recipient (the applicant's
+   own uid — never broadcast), real data (their own org name). */
+export async function notifyOrganiserApplicationApproved({ uid, orgName }){
+  if(!ready || !uid) return false;
+  try{
+    const created = await createNotification({
+      type: 'important_update',
+      title: 'Organiser application approved',
+      message: orgName
+        ? `Your application for "${orgName}" has been approved — you can now create tournaments.`
+        : 'Your organiser application has been approved — you can now create tournaments.',
+      actionType: 'open_home',
+      audienceType: 'user',
+      audienceFilter: { user_id: uid }
+    });
+    await sendNotificationNow(created.id);
+    return true;
+  }catch(err){
+    // Never let a notification failure block the approval itself — the
+    // approval already succeeded by the time this runs.
+    console.error('notifyOrganiserApplicationApproved failed (approval itself was unaffected):', err);
+    return false;
+  }
+}
+
+/* Defined for real, wired nowhere by default — see the block comment above.
+   audienceType/audienceFilter are required args (no default to 'all') so a
+   future caller has to make a deliberate audience choice, not fall into a
+   silent broadcast. */
+export async function notifyMatchStarted(match, { audienceType, audienceFilter }){
+  if(!ready || !match || !audienceType) return false;
+  try{
+    const created = await createNotification({
+      type: 'live_match',
+      title: 'Match started',
+      message: `${match.teamA || 'Team A'} vs ${match.teamB || 'Team B'} is live now.`,
+      actionType: 'open_live_match', actionTarget: match.id,
+      audienceType, audienceFilter: audienceFilter || {}
+    });
+    await sendNotificationNow(created.id);
+    return true;
+  }catch(err){ console.error('notifyMatchStarted failed:', err); return false; }
+}
+
+export async function notifyMatchCompleted(match, { audienceType, audienceFilter }){
+  if(!ready || !match || !audienceType) return false;
+  try{
+    const created = await createNotification({
+      type: 'match_result',
+      title: 'Match completed',
+      message: match.resultText || `${match.teamA || 'Team A'} vs ${match.teamB || 'Team B'} has finished.`,
+      actionType: 'open_live_match', actionTarget: match.id,
+      audienceType, audienceFilter: audienceFilter || {}
+    });
+    await sendNotificationNow(created.id);
+    return true;
+  }catch(err){ console.error('notifyMatchCompleted failed:', err); return false; }
+}
+
 /* ---------------- util ---------------- */
 
 function requireCloud(){

@@ -52,8 +52,17 @@ import {
   submitFeedback, fetchAllFeedback, updateFeedbackStatus,
   fetchAllTournamentsAdmin, fetchAllMatchesAdmin, fetchAllProfilesAdmin,
   adminCancelTournament, adminCancelMatch, adminSetOrganiserStatus,
-  fetchTopPlayers
+  fetchTopPlayers,
+  createNotification, previewAudienceCount, sendNotificationNow, cancelScheduledNotification,
+  fetchNotificationHistory, fetchNotificationStats,
+  fetchNotificationTemplates, saveNotificationTemplate, deleteNotificationTemplate,
+  fetchMyNotifications, fetchUnreadNotificationCount, markNotificationRead,
+  markAllNotificationsRead, dismissNotification, watchMyNotifications,
+  registerDeviceToken, removeDeviceToken,
+  notifyOrganiserApplicationApproved, notifyMatchStarted, notifyMatchCompleted
 } from './cloud.js';
+
+import { firebaseMessagingConfig, vapidKey, isPushConfigured } from './firebase-messaging-config.js';
 
 import {
   validateHandle, pairId, newConnection, connectionActionFor, canRespond,
@@ -66,6 +75,15 @@ const K = {
   tours:'cs_tournaments_v3', events:'cs_events_v3', profile:'cs_profile_v3'
 };
 const APP_VERSION = '4.1';
+
+/* Kept OFF — see cloud.js's "automated cricket-event hooks" comment for why:
+   match started/completed have no resolvable real audience yet (no
+   followers/subscribers table), so auto-firing them today could only mean
+   broadcasting to 'all' on every casual match anyone scores. The call sites
+   below are real and wired, just inert while this is false. Flip only after
+   deciding a real audienceType/audienceFilter — see notifyMatchStarted /
+   notifyMatchCompleted in cloud.js. */
+const AUTO_CRICKET_NOTIFICATIONS = false;
 
 /* ---------------- state ---------------- */
 let match = null;
@@ -94,6 +112,9 @@ let isAdminUser = false;
 let myConnections = [];
 let friendResults = [];
 let profileCache = {};
+let myNotifications = [];
+let notifUnreadCount = 0;
+let notifUnsub = null;
 let pendingApps = [];
 let adminOverview = { organisers:0, tournaments:0, matches:0, liveMatches:0, liveTournaments:0 };
 let adminLoadError = null;      // set to an Error when the last refreshAdminData() failed
@@ -108,6 +129,12 @@ let adminTournamentsAll = [];   // [{ id, ownerId, tournament, updatedAt }]
 let adminMatchesAll = [];       // [{ id, ownerId, match, cancelled, updatedAt }]
 let adminProfilesAll = [];      // raw profile rows
 let adminFeedbackAll = [];      // raw feedback rows
+let adminNotifTemplates = [];
+let adminNotifHistory = [];
+let adminNotifStats = { total:0, sentThisMonth:0, scheduled:0, activeDevices:0, lastBroadcast:null };
+let notifSelectedUserPicks = [];   // [{uid, displayName, handle}] — "Selected Users" audience picks
+let notifUserSearchResults = [];
+let notifSending = false;          // double-submission guard on the confirm dialog's Send button
 let adminLiveNowById = {};      // id -> { match, location, updatedAt } — from live_matches, the
                                  // only source with genuine per-ball freshness (see note below)
 let adminLiveUnsub = null;      // realtime teardown, mirrors liveNowUnsub/onlineUnsub
@@ -209,7 +236,7 @@ function isSignedIn(){ return cloudReady() && !!getUser(); }
 function requiresAccount(){ return cloudReady(); }
 
 /* ---------------- navigation ---------------- */
-const SCREENS = ['auth','home','setup','live','result','history','teams','tournaments','tournament','stats','profile','friends','admin','player','live-now','feedback'];
+const SCREENS = ['auth','home','setup','live','result','history','teams','tournaments','tournament','stats','profile','friends','admin','player','live-now','feedback','notifications'];
 const TAB_OF = { home:'home', tournaments:'tournaments', tournament:'tournaments',
                  teams:'teams', stats:'profile', history:'history', profile:'profile',
                  friends:'friends', admin:'admin', 'live-now':'live-now' };
@@ -274,7 +301,7 @@ function renderSidebarAccount(){
     b.addEventListener('click', ()=>{
       menu.classList.add('hidden');
       const action = b.dataset.sa;
-      if(action === 'logout'){ signOutUser().then(()=>{ toast('Signed out'); go('auth'); }); return; }
+      if(action === 'logout'){ disablePushNotifications().finally(()=>signOutUser().then(()=>{ toast('Signed out'); go('auth'); })); return; }
       if(action === 'login'){ setAuthMode('signin'); go('auth'); return; }
       if(action === 'signup'){ setAuthMode('signup'); go('auth'); return; }
       if(action === 'settings'){ go('profile'); return; }
@@ -363,6 +390,203 @@ async function doReset(){
     await sendReset(email);
     authMsg('Password reset link sent to ' + email, true);
   }catch(err){ authMsg(authErrorText(err)); }
+}
+
+/* ---------------- push notifications ----------------
+   Firebase Messaging's SDK is loaded from esm.sh, same lazy/pinned-CDN
+   pattern cloud.js already uses for supabase-js — never loaded at all for
+   the majority of visits (guests, or users who never open the toggle),
+   and pinned deliberately rather than "latest" for the same reason
+   cloud.js's SDK_URL is pinned. Firebase credentials here are the public,
+   safe-to-ship kind (see firebase-messaging-config.js) — the one genuinely
+   secret piece, the FCM service-account key, never leaves the Edge Function
+   on the server (supabase/functions/send-notification). Delivery itself is
+   handled by sw.js's own `push`/`notificationclick` listeners — this module
+   only ever does registration. */
+const FIREBASE_SDK_VERSION = '10.12.2';
+let pushToken = null;
+
+function pushSupported(){
+  return 'Notification' in window && 'serviceWorker' in navigator && isPushConfigured();
+}
+function pushPermission(){
+  return ('Notification' in window) ? Notification.permission : 'unsupported';
+}
+
+async function enablePushNotifications(){
+  if(!pushSupported()) return { ok:false, reason:'unsupported' };
+  if(!isSignedIn()) return { ok:false, reason:'signed-out' };
+  try{
+    const permission = await Notification.requestPermission();
+    if(permission !== 'granted') return { ok:false, reason: permission === 'denied' ? 'denied' : 'dismissed' };
+
+    const { initializeApp } = await import(`https://esm.sh/firebase@${FIREBASE_SDK_VERSION}/app`);
+    const { getMessaging, getToken } = await import(`https://esm.sh/firebase@${FIREBASE_SDK_VERSION}/messaging`);
+    const fbApp = initializeApp(firebaseMessagingConfig);
+    const messaging = getMessaging(fbApp);
+    const registration = await navigator.serviceWorker.ready;
+    const token = await getToken(messaging, { vapidKey, serviceWorkerRegistration: registration });
+    if(!token) return { ok:false, reason:'no-token' };
+
+    const ua = navigator.userAgent || '';
+    const label = /Android/i.test(ua) ? 'Android · Chrome' : /iPhone|iPad/i.test(ua) ? 'iOS · Safari' : 'Web browser';
+    const saved = await registerDeviceToken({ token, platform:'web', deviceLabel: label });
+    if(!saved) return { ok:false, reason:'save-failed' };
+
+    pushToken = token;
+    return { ok:true };
+  }catch(err){
+    console.error('enablePushNotifications failed:', err);
+    return { ok:false, reason:'error' };
+  }
+}
+
+/* There's no way to programmatically revoke the browser's own Notification
+   permission (only the user can do that, in their browser's site settings)
+   — this only stops *this account* from being sent to on *this device*,
+   which is the part actually within the app's control. Copy in the UI
+   should say that plainly rather than imply a full unsubscribe. */
+async function disablePushNotifications(){
+  if(pushToken) await removeDeviceToken(pushToken);
+  pushToken = null;
+}
+
+/* Browser permission (Notification.permission) is the actual source of
+   truth for whether push can work on this device — not our own in-memory
+   pushToken, which starts null on every fresh page load even for someone
+   who enabled this last week. "denied" can only be undone by the user in
+   their own browser's site settings; the toggle reflects that honestly
+   instead of pretending a click could fix it. */
+function renderPushToggle(){
+  const row = $('pushToggleRow');
+  if(!row) return;
+  if(!isSignedIn() || !pushSupported()){ row.classList.add('hidden'); return; }
+  row.classList.remove('hidden');
+  const cb = $('pushToggle');
+  const permission = pushPermission();
+  cb.checked = permission === 'granted';
+  cb.disabled = permission === 'denied';
+  $('pushToggleHint').textContent = permission === 'denied'
+    ? 'Blocked in your browser settings — enable notifications for this site there first.'
+    : 'Get notified even when the app is closed';
+}
+
+/* ---------------- notification center ----------------
+   Real recipient rows only — see cloud.js fetchMyNotifications(), which is
+   scoped by notification_recipients' own RLS (owner or admin), same trust
+   level as any other "my data" read in this app. */
+
+const NOTIF_TYPE_ICON = {
+  announcement:'\u{1F4E2}', cricket_news:'\u{1F3CF}', tournament:'\u{1F3C6}',
+  live_match:'\u{1F534}', match_result:'\u{1F4CA}', team:'\u{1F465}', player:'\u{1F464}',
+  reward:'\u{1F381}', important_update:'⚠️', maintenance:'\u{1F527}', custom:'\u{1F514}'
+};
+
+async function refreshMyNotifications(){
+  const [list, count] = await Promise.all([fetchMyNotifications(), fetchUnreadNotificationCount()]);
+  myNotifications = list;
+  notifUnreadCount = count;
+  updateNotifBadges();
+}
+
+/* Every bell/nav badge in the app reads the same notifUnreadCount — right
+   now that's the Home topbar bell and the sidebar's Notifications item.
+   Both are optional chained lookups so this never throws if a future screen
+   swap removes one of them. */
+function updateNotifBadges(){
+  const n = notifUnreadCount;
+  const label = n > 99 ? '99+' : String(n);
+  [$('homeNotifBadge'), $('sideNotifBadge')].forEach(el=>{
+    if(!el) return;
+    el.textContent = label;
+    el.classList.toggle('hidden', n <= 0);
+  });
+}
+
+function fmtNotifTime(iso){
+  const d = new Date(iso);
+  const now = new Date();
+  const sameDay = d.toDateString() === now.toDateString();
+  const yesterday = new Date(now); yesterday.setDate(now.getDate() - 1);
+  const isYesterday = d.toDateString() === yesterday.toDateString();
+  if(sameDay) return 'Today';
+  if(isYesterday) return 'Yesterday';
+  return d.toLocaleDateString(undefined, { day:'numeric', month:'short' });
+}
+
+function renderNotifications(){
+  const box = $('notifList');
+  if(!box) return;
+  $('notifMarkAllBtn').disabled = notifUnreadCount <= 0;
+
+  if(!myNotifications.length){
+    box.innerHTML = `<div class="empty-note">Nothing here yet.<br>
+      Announcements, tournament updates and match alerts will show up in this list.</div>`;
+    return;
+  }
+
+  let lastGroup = null;
+  box.innerHTML = myNotifications.map(item=>{
+    const group = fmtNotifTime(item.receivedAt);
+    const groupHeader = group !== lastGroup ? `<div class="stat-dim" style="margin:14px 0 6px;text-transform:uppercase;font-size:10.5px;letter-spacing:1px;">${esc(group)}</div>` : '';
+    lastGroup = group;
+    const unread = !item.readAt;
+    return groupHeader + `
+      <div class="card notif-item ${unread ? 'unread' : ''}" data-notif-open="${esc(item.recipientId)}" style="margin-bottom:8px;cursor:pointer;">
+        <div style="display:flex;gap:10px;align-items:flex-start;">
+          <div style="font-size:20px;line-height:1;">${NOTIF_TYPE_ICON[item.type] || NOTIF_TYPE_ICON.custom}</div>
+          <div style="flex:1;min-width:0;">
+            <div class="batter-name">${esc(item.title)}</div>
+            <div class="stat-dim" style="margin-top:2px;">${esc(item.message)}</div>
+          </div>
+          ${unread ? '<span class="dot live" style="margin-top:6px;flex-shrink:0;"></span>' : ''}
+          <button class="icon-btn" data-notif-dismiss="${esc(item.recipientId)}" title="Dismiss" style="flex-shrink:0;">&times;</button>
+        </div>
+      </div>`;
+  }).join('');
+
+  box.querySelectorAll('[data-notif-open]').forEach(el=>
+    el.addEventListener('click', (e)=>{
+      if(e.target.closest('[data-notif-dismiss]')) return;
+      openNotificationItem(el.dataset.notifOpen);
+    }));
+  box.querySelectorAll('[data-notif-dismiss]').forEach(el=>
+    el.addEventListener('click', (e)=>{ e.stopPropagation(); dismissNotificationItem(el.dataset.notifDismiss); }));
+}
+
+async function openNotificationItem(recipientId){
+  const item = myNotifications.find(x=>x.recipientId === recipientId);
+  if(!item) return;
+  if(!item.readAt){
+    item.readAt = new Date().toISOString();
+    notifUnreadCount = Math.max(0, notifUnreadCount - 1);
+    updateNotifBadges();
+    markNotificationRead(recipientId); // fire-and-forget — the local state above is already correct
+    renderNotifications();
+  }
+  switch(item.actionType){
+    case 'open_tournament': if(item.actionTarget) openTournamentView(item.actionTarget); break;
+    case 'open_live_match': if(item.actionTarget) location.href = './live.html?m=' + encodeURIComponent(item.actionTarget); break;
+    case 'open_player': if(item.actionTarget) openPlayerProfile({ uid: item.actionTarget }); break;
+    case 'open_home': go('home'); break;
+    // 'open_notifications' and 'none' both mean: nothing to navigate to,
+    // stay right here — already on the notification center.
+  }
+}
+
+async function dismissNotificationItem(recipientId){
+  myNotifications = myNotifications.filter(x=>x.recipientId !== recipientId);
+  renderNotifications();
+  await dismissNotification(recipientId);
+}
+
+async function markAllNotificationsReadAction(){
+  if(notifUnreadCount <= 0) return;
+  myNotifications.forEach(x=>{ if(!x.readAt) x.readAt = new Date().toISOString(); });
+  notifUnreadCount = 0;
+  updateNotifBadges();
+  renderNotifications();
+  await markAllNotificationsRead();
 }
 
 /* ---------------- profile photo ----------------
@@ -492,6 +716,7 @@ function renderProfile(){
   }
   $('goAdminBtn').classList.toggle('hidden', !isAdminUser);
   $('feedbackCard').classList.toggle('hidden', !isSignedIn());
+  renderPushToggle();
 
   // Organiser Progress — real count of this organiser's own tournaments that
   // have genuinely finished (deriveStatus checks tournamentChampion(t), not
@@ -530,7 +755,7 @@ function renderProfile(){
   } else if(u){
     who.innerHTML = '<span class="dot online"></span>Synced as <b>' + esc(u.email || displayName()) + '</b>';
     btn.textContent = 'Sign out';
-    btn.onclick = async ()=>{ await signOutUser(); toast('Signed out'); go('auth'); };
+    btn.onclick = async ()=>{ await disablePushNotifications(); await signOutUser(); toast('Signed out'); go('auth'); };
   } else {
     who.innerHTML = '<span class="dot offline"></span>Not signed in';
     btn.textContent = 'Sign in / Create account';
@@ -753,10 +978,12 @@ async function refreshAdminData(){
   if(!isAdminUser) return;
   adminLoading = true; adminLoadError = null;
   try{
-    const [apps, orgCount, platformStats, tours, matchesAdmin, profilesAdmin, feedbackAll, liveNow] = await Promise.all([
+    const [apps, orgCount, platformStats, tours, matchesAdmin, profilesAdmin, feedbackAll, liveNow,
+           notifTemplates, notifHistory, notifStats] = await Promise.all([
       fetchPendingOrganiserApplications(), countOrganisers(), fetchPlatformStats(),
       fetchAllTournamentsAdmin(), fetchAllMatchesAdmin(), fetchAllProfilesAdmin(), fetchAllFeedback(),
-      fetchLiveMatchesNow()
+      fetchLiveMatchesNow(),
+      fetchNotificationTemplates(), fetchNotificationHistory(), fetchNotificationStats()
     ]);
     pendingApps = apps;
     adminOverview.organisers = orgCount;
@@ -769,6 +996,9 @@ async function refreshAdminData(){
     adminProfilesAll = profilesAdmin;
     adminFeedbackAll = feedbackAll;
     applyLiveNowSnapshot(liveNow);
+    adminNotifTemplates = notifTemplates;
+    adminNotifHistory = notifHistory;
+    adminNotifStats = notifStats;
     await resolveProfiles([
       ...pendingApps.map(a=>a.uid),
       ...tours.map(t=>t.ownerId), ...matchesAdmin.map(m=>m.ownerId), ...feedbackAll.map(f=>f.user_id)
@@ -887,6 +1117,7 @@ function renderAdmin(){
   else if(adminTab === 'organisers') renderAdminOrganisers();
   else if(adminTab === 'users') renderAdminUsers();
   else if(adminTab === 'feedback') renderAdminFeedback();
+  else if(adminTab === 'notifications') renderAdminNotifications();
   else if(adminTab === 'activity') renderAdminActivity();
 }
 
@@ -1119,9 +1350,345 @@ function renderAdminActivity(){
     : '<div class="empty-note">No recent activity.</div>';
 }
 
+/* ---------------- admin: notifications ----------------
+   Compose form fields are plain DOM state (never re-rendered while the
+   admin is mid-edit) — renderAdminNotifications() only ever repaints the
+   read-only parts: stats, the template dropdown's options, and history.
+   Live preview/audience-count/visibility wiring lives in bind(). */
+
+// NOTIF_TYPE_ICON is already defined above (shared with the user-facing
+// Notification Center) — reused here rather than redeclared.
+const NOTIF_ACTION_LABEL = {
+  open_tournament:'Open Tournament', open_live_match:'Open Live Match',
+  open_player:'Open Player Profile', open_notifications:'Open Notification Center',
+  open_home:'Open Homepage'
+};
+const NOTIF_AUDIENCE_LABEL = {
+  all:'All Users', players:'Players', organisers:'Organisers',
+  country:'Country', city:'City/District', selected:'Selected Users', user:'Specific User'
+};
+const NOTIF_STATUS_BADGE = {
+  draft:['open','Draft'], scheduled:['open','Scheduled'], sending:['live','Sending'],
+  sent:['done','Sent'], partially_failed:['open','Partially failed'],
+  failed:['cancelled','Failed'], cancelled:['cancelled','Cancelled']
+};
+function notifStatusBadgeHTML(status){
+  const [cls, label] = NOTIF_STATUS_BADGE[status] || ['open', status];
+  return `<span class="badge ${cls}">${label}</span>`;
+}
+function notifAudienceLabel(n){
+  if(n.audienceType === 'country') return `Country: ${n.audienceFilter?.country || ''}`;
+  if(n.audienceType === 'city') return `City: ${n.audienceFilter?.district || ''}`;
+  if(n.audienceType === 'selected') return `${(n.audienceFilter?.user_ids || []).length} selected user(s)`;
+  return NOTIF_AUDIENCE_LABEL[n.audienceType] || n.audienceType;
+}
+
+function renderAdminNotifications(){
+  $('notifStatTotal').textContent = adminNotifStats.total;
+  $('notifStatSentMonth').textContent = adminNotifStats.sentThisMonth;
+  $('notifStatScheduled').textContent = adminNotifStats.scheduled;
+  $('notifStatDevices').textContent = adminNotifStats.activeDevices;
+  $('notifStatLast').textContent = adminNotifStats.lastBroadcast
+    ? `Last broadcast: "${adminNotifStats.lastBroadcast.title}" · ${new Date(adminNotifStats.lastBroadcast.sent_at).toLocaleString()}`
+    : 'No broadcasts sent yet.';
+
+  const sel = $('notifTemplateSelect');
+  const current = sel.value;
+  sel.innerHTML = '<option value="">Start from scratch</option>' +
+    adminNotifTemplates.map(t=>`<option value="${esc(t.id)}">${esc(t.name)}</option>`).join('');
+  sel.value = adminNotifTemplates.some(t=>t.id === current) ? current : '';
+
+  renderNotifHistoryList();
+  updateNotifFieldVisibility();
+}
+
+function renderNotifHistoryList(){
+  const box = $('notifHistoryList');
+  if(!adminNotifHistory.length){ box.innerHTML = '<div class="empty-note">No notifications sent yet.</div>'; return; }
+  box.innerHTML = adminNotifHistory.map(n=>`
+    <div class="card" style="margin-bottom:8px;cursor:pointer;" data-action="admin-open-notification" data-id="${esc(n.id)}">
+      <div style="display:flex;justify-content:space-between;gap:8px;align-items:flex-start;">
+        <div class="lp-n">
+          <div class="batter-name">${NOTIF_TYPE_ICON[n.type] || ''} ${esc(n.title)}</div>
+          <div class="stat-dim">${esc(notifAudienceLabel(n))} &middot; ${n.recipientsTotal || 0} recipients &middot; ${new Date(n.createdAt).toLocaleString()}</div>
+        </div>
+        ${notifStatusBadgeHTML(n.status)}
+      </div>
+    </div>`).join('');
+}
+
+function openAdminNotificationDetail(id){
+  const n = adminNotifHistory.find(x=>x.id === id);
+  if(!n) return;
+  openModal(`
+    <h3>${NOTIF_TYPE_ICON[n.type] || ''} ${esc(n.title)}</h3>
+    <div style="margin:10px 0;">${esc(n.message)}</div>
+    <div class="kv-list">
+      <div class="kv-row"><div class="kv-k">Status</div><div class="kv-v">${notifStatusBadgeHTML(n.status)}</div></div>
+      <div class="kv-row"><div class="kv-k">Audience</div><div class="kv-v">${esc(notifAudienceLabel(n))}</div></div>
+      <div class="kv-row"><div class="kv-k">Recipients</div><div class="kv-v">${n.recipientsTotal || 0}</div></div>
+      <div class="kv-row"><div class="kv-k">Push submitted</div><div class="kv-v">${n.pushSubmitted || 0}</div></div>
+      <div class="kv-row"><div class="kv-k">Push failed</div><div class="kv-v">${n.pushFailed || 0}</div></div>
+      <div class="kv-row"><div class="kv-k">Created</div><div class="kv-v">${new Date(n.createdAt).toLocaleString()}</div></div>
+      ${n.scheduledAt ? `<div class="kv-row"><div class="kv-k">Scheduled for</div><div class="kv-v">${new Date(n.scheduledAt).toLocaleString()}</div></div>` : ''}
+      ${n.sentAt ? `<div class="kv-row"><div class="kv-k">Sent</div><div class="kv-v">${new Date(n.sentAt).toLocaleString()}</div></div>` : ''}
+      ${n.errorMessage ? `<div class="kv-row"><div class="kv-k">Note</div><div class="kv-v">${esc(n.errorMessage)}</div></div>` : ''}
+    </div>
+    <div style="display:flex;gap:8px;margin-top:16px;">
+      <button class="btn secondary" data-action="close">Close</button>
+      ${n.status === 'scheduled' ? `<button class="btn danger" data-action="admin-cancel-notification" data-id="${esc(n.id)}">Cancel scheduled send</button>` : ''}
+    </div>
+  `);
+}
+
+async function adminCancelNotificationAction(id){
+  const ok = await cancelScheduledNotification(id);
+  if(ok){
+    toast('Scheduled notification cancelled');
+    closeModal();
+    adminNotifHistory = await fetchNotificationHistory();
+    adminNotifStats = await fetchNotificationStats();
+    renderAdminNotifications();
+  } else toast('Could not cancel — try again');
+}
+
+/* ---- compose form: read current state / live preview / field visibility ---- */
+
+function currentNotifAudienceFilter(){
+  const at = $('notifAudienceType').value;
+  if(at === 'country') return { country: $('notifAudienceCountry').value.trim() };
+  if(at === 'city') return { district: $('notifAudienceCity').value.trim() };
+  if(at === 'selected') return { user_ids: notifSelectedUserPicks.map(p=>p.uid) };
+  return {};
+}
+function currentNotifComposeState(){
+  return {
+    type: $('notifType').value,
+    title: $('notifTitle').value.trim(),
+    message: $('notifMessage').value.trim(),
+    imageUrl: $('notifImageUrl').value.trim(),
+    actionType: $('notifActionType').value,
+    actionTarget: $('notifActionTarget').value.trim(),
+    audienceType: $('notifAudienceType').value,
+    audienceFilter: currentNotifAudienceFilter()
+  };
+}
+
+function updateNotifPreview(){
+  const s = currentNotifComposeState();
+  $('notifPreviewBox').innerHTML = `
+    <div class="notif-preview-card">
+      <div class="npc-head"><span>${NOTIF_TYPE_ICON[s.type] || NOTIF_TYPE_ICON.custom}</span><span class="npc-app">Cricket Connect</span></div>
+      <div class="npc-title">${s.title ? esc(s.title) : '<em>Title goes here</em>'}</div>
+      <div class="npc-msg">${s.message ? esc(s.message) : '<em>Message goes here</em>'}</div>
+      ${s.imageUrl ? `<img class="npc-img" src="${esc(s.imageUrl)}" alt="" onerror="this.remove()">` : ''}
+      ${s.actionType !== 'none' ? `<div class="npc-action">${esc(NOTIF_ACTION_LABEL[s.actionType] || 'Open')} &rsaquo;</div>` : ''}
+    </div>`;
+}
+
+function updateNotifFieldVisibility(){
+  const actionType = $('notifActionType').value;
+  const needsTarget = ['open_tournament','open_live_match','open_player'].includes(actionType);
+  $('notifActionTarget').classList.toggle('hidden', !needsTarget);
+  $('notifActionTargetHint').classList.toggle('hidden', !needsTarget);
+
+  const audienceType = $('notifAudienceType').value;
+  $('notifAudienceCountry').classList.toggle('hidden', audienceType !== 'country');
+  $('notifAudienceCity').classList.toggle('hidden', audienceType !== 'city');
+  $('notifSelectedUsersBox').classList.toggle('hidden', audienceType !== 'selected');
+
+  updateNotifAudienceCount();
+  updateNotifPreview();
+}
+
+let notifAudienceCountTimer = null;
+function updateNotifAudienceCount(){
+  clearTimeout(notifAudienceCountTimer);
+  const hint = $('notifAudienceCountHint');
+  hint.textContent = 'Checking audience size…';
+  notifAudienceCountTimer = setTimeout(async ()=>{
+    try{
+      const s = currentNotifComposeState();
+      const n = await previewAudienceCount(s.audienceType, s.audienceFilter);
+      hint.textContent = `${n.toLocaleString()} user${n === 1 ? '' : 's'} match this audience right now.`;
+    }catch(e){ hint.textContent = 'Could not check audience size.'; }
+  }, 450);
+}
+
+function resetNotifComposeForm(){
+  $('notifTemplateSelect').value = '';
+  $('notifType').value = 'announcement';
+  $('notifTitle').value = '';
+  $('notifMessage').value = '';
+  $('notifImageUrl').value = '';
+  $('notifActionType').value = 'none';
+  $('notifActionTarget').value = '';
+  $('notifAudienceType').value = 'all';
+  $('notifAudienceCountry').value = '';
+  $('notifAudienceCity').value = '';
+  notifSelectedUserPicks = [];
+  notifUserSearchResults = [];
+  $('notifUserSearch').value = '';
+  $('notifUserSearchResults').innerHTML = '';
+  renderNotifSelectedChips();
+  $('notifScheduleToggle').checked = false;
+  $('notifScheduleFields').classList.add('hidden');
+  $('notifScheduleDate').value = '';
+  $('notifScheduleTime').value = '';
+  $('notifComposeMsg').innerHTML = '';
+  updateNotifFieldVisibility();
+}
+
+/* ---- "Selected Users" picker ---- */
+
+function renderNotifUserSearchResults(){
+  const box = $('notifUserSearchResults');
+  box.innerHTML = notifUserSearchResults.length ? notifUserSearchResults.map(p=>`
+    <div class="list-pick">
+      <div class="lp-identity" style="display:flex;align-items:center;gap:10px;flex:1;min-width:0;">
+        ${initialsBadge(p.displayName || p.handle, 30)}
+        <div class="lp-n">${esc(p.displayName || '')} <span class="stat-dim">@${esc(p.handle || '')}</span></div>
+      </div>
+      <button class="icon-btn" data-notif-pick="${esc(p.uid)}">Add</button>
+    </div>`).join('') : '<div class="empty-note">No matches.</div>';
+  box.querySelectorAll('[data-notif-pick]').forEach(b=>
+    b.addEventListener('click', ()=>{
+      const uid = b.dataset.notifPick;
+      const p = notifUserSearchResults.find(x=>x.uid === uid);
+      if(p && !notifSelectedUserPicks.some(x=>x.uid === uid)) notifSelectedUserPicks.push(p);
+      renderNotifSelectedChips();
+      updateNotifAudienceCount();
+    }));
+}
+function renderNotifSelectedChips(){
+  const box = $('notifSelectedUsersChips');
+  box.innerHTML = notifSelectedUserPicks.map(p=>
+    `<span class="roster-chip">@${esc(p.handle || p.displayName || 'user')}<button data-notif-unpick="${esc(p.uid)}">&times;</button></span>`
+  ).join('');
+  box.querySelectorAll('[data-notif-unpick]').forEach(b=>
+    b.addEventListener('click', ()=>{
+      notifSelectedUserPicks = notifSelectedUserPicks.filter(p=>p.uid !== b.dataset.notifUnpick);
+      renderNotifSelectedChips();
+      updateNotifAudienceCount();
+    }));
+  $('notifClearSelectedBtn').classList.toggle('hidden', !notifSelectedUserPicks.length);
+}
+
+/* ---- send / schedule, with validation + a confirmation step ---- */
+
+async function handleNotifSendClick(){
+  const msgBox = $('notifComposeMsg');
+  msgBox.innerHTML = '';
+  const s = currentNotifComposeState();
+  const err = (t)=>{ msgBox.innerHTML = `<div class="auth-error">${esc(t)}</div>`; };
+
+  if(!s.title) return err('Title is required.');
+  if(!s.message) return err('Message is required.');
+  if(/\{\{.*?\}\}/.test(s.title) || /\{\{.*?\}\}/.test(s.message))
+    return err('Replace the {{placeholder}} text from the template before sending — never send raw placeholders to real users.');
+  if(['open_tournament','open_live_match','open_player'].includes(s.actionType) && !s.actionTarget)
+    return err('This action needs an id to open — paste one, or set the action to "No action".');
+  if(s.audienceType === 'country' && !s.audienceFilter.country) return err('Enter a country.');
+  if(s.audienceType === 'city' && !s.audienceFilter.district) return err('Enter a city/district.');
+  if(s.audienceType === 'selected' && !notifSelectedUserPicks.length) return err('Pick at least one user.');
+
+  const scheduleOn = $('notifScheduleToggle').checked;
+  let scheduledAt = null;
+  if(scheduleOn){
+    const date = $('notifScheduleDate').value, time = $('notifScheduleTime').value;
+    if(!date || !time) return err('Pick a date and time to schedule.');
+    scheduledAt = new Date(`${date}T${time}`);
+    if(isNaN(scheduledAt.getTime()) || scheduledAt <= new Date()) return err('Scheduled time must be in the future.');
+  }
+
+  let count;
+  try{ count = await previewAudienceCount(s.audienceType, s.audienceFilter); }
+  catch(e){ return err('Could not check audience size — try again.'); }
+  if(count === 0) return err('No users match this audience.');
+
+  openModal(`
+    <h3>${scheduleOn ? 'Schedule this notification?' : 'Send this notification now?'}</h3>
+    <div style="margin:10px 0;">
+      ${scheduleOn
+        ? `This will be sent to <b>${count.toLocaleString()}</b> user${count === 1 ? '' : 's'} on <b>${esc(scheduledAt.toLocaleString())}</b>.`
+        : `This will be sent to <b>${count.toLocaleString()}</b> user${count === 1 ? '' : 's'} right now. This can't be undone.`}
+    </div>
+    <div style="display:flex;gap:8px;">
+      <button class="btn secondary" data-action="close">Cancel</button>
+      <button class="btn" id="notifConfirmSendBtn">${scheduleOn ? 'Schedule' : 'Send Notification'}</button>
+    </div>
+  `);
+  $('notifConfirmSendBtn').addEventListener('click', ()=>confirmNotifSend(s, scheduledAt));
+}
+
+async function confirmNotifSend(s, scheduledAt){
+  if(notifSending) return; // double-submission guard
+  notifSending = true;
+  const btn = $('notifConfirmSendBtn');
+  if(btn){ btn.disabled = true; btn.textContent = 'Sending…'; }
+  try{
+    const created = await createNotification({
+      type: s.type, title: s.title, message: s.message, imageUrl: s.imageUrl || null,
+      actionType: s.actionType, actionTarget: s.actionTarget || null,
+      audienceType: s.audienceType, audienceFilter: s.audienceFilter,
+      scheduledAt: scheduledAt ? scheduledAt.toISOString() : null
+    });
+    if(scheduledAt) toast('Notification scheduled');
+    else { await sendNotificationNow(created.id); toast('Notification sent'); }
+    closeModal();
+    resetNotifComposeForm();
+    adminNotifHistory = await fetchNotificationHistory();
+    adminNotifStats = await fetchNotificationStats();
+    renderAdminNotifications();
+  }catch(err){
+    console.error('send notification failed:', err);
+    closeModal();
+    toast('Could not send — ' + (err && err.message ? err.message : 'try again'));
+  }finally{
+    notifSending = false;
+  }
+}
+
+function openSaveTemplateModal(){
+  openModal(`
+    <h3>Save as template</h3>
+    <label>Template name</label>
+    <input type="text" id="notifTemplateNameInput" maxlength="80" placeholder="e.g. Weekly Tournament Announcement">
+    <div style="display:flex;gap:8px;margin-top:14px;">
+      <button class="btn secondary" data-action="close">Cancel</button>
+      <button class="btn" id="notifTemplateSaveConfirmBtn">Save</button>
+    </div>
+  `);
+  $('notifTemplateSaveConfirmBtn').addEventListener('click', async ()=>{
+    const name = $('notifTemplateNameInput').value.trim();
+    if(!name) return;
+    const s = currentNotifComposeState();
+    const saved = await saveNotificationTemplate({
+      name, type: s.type, titleTemplate: s.title, messageTemplate: s.message, actionType: s.actionType
+    });
+    if(saved){
+      toast('Template saved');
+      closeModal();
+      adminNotifTemplates = await fetchNotificationTemplates();
+      renderAdminNotifications();
+    } else toast('Could not save template');
+  });
+}
+
 async function approveApp(id){
+  const app = pendingApps.find(a=>a.id === id);
   const ok = await approveOrganiserApplication(id);
-  if(ok){ toast('Approved'); pendingApps = pendingApps.filter(a=>a.id !== id); renderAdmin(); }
+  if(ok){
+    toast('Approved');
+    pendingApps = pendingApps.filter(a=>a.id !== id);
+    renderAdmin();
+    // Real, live-wired automated notification — see cloud.js's
+    // "automated cricket-event hooks" comment for why this is the only one
+    // that's actually enabled by default (single real recipient, no spam
+    // risk). Fire-and-forget: a failed notification must never undo an
+    // already-successful approval.
+    if(app && app.uid) notifyOrganiserApplicationApproved({ uid: app.uid, orgName: app.orgName });
+  }
   else toast('Could not approve — try again');
 }
 
@@ -2283,6 +2850,10 @@ function startMatch(toss){
   undoStack = [];
   persistMatch();
   if(match.liveShare) pushLiveNow(match).then(ok=>ok && toast('Live link active'));
+  // Real trigger point for a "match started" push — inert by default, see
+  // AUTO_CRICKET_NOTIFICATIONS / cloud.js notifyMatchStarted for why.
+  if(AUTO_CRICKET_NOTIFICATIONS && cloudReady() && getUser() && match.liveShare)
+    notifyMatchStarted(match, { audienceType:'all' });
   go('live');
 }
 
@@ -2350,6 +2921,10 @@ async function handleInningsEnd(){
   if(cloudReady() && getUser()){
     saveMatchToCloud(match);
     if(match.liveShare) pushLiveNow(match);
+    // Real trigger point for a "match completed" push — inert by default,
+    // see AUTO_CRICKET_NOTIFICATIONS / cloud.js notifyMatchCompleted for why.
+    if(AUTO_CRICKET_NOTIFICATIONS && match.liveShare)
+      notifyMatchCompleted(match, { audienceType:'all' });
   }
   undoStack = [];
   persistMatch();
@@ -3734,7 +4309,7 @@ const GATED = {
   tournaments:'run tournaments',
   stats:'see your records', history:'see your match history',
   friends:'find and add friends', admin:'manage the platform',
-  feedback:'leave feedback'
+  feedback:'leave feedback', notifications:'see your notifications'
 };
 
 function render(){
@@ -3770,6 +4345,7 @@ function render(){
     case 'player': renderPlayerProfile(); break;
     case 'live-now': renderLiveNow(); break;
     case 'feedback': renderFeedback(); break;
+    case 'notifications': renderNotifications(); break;
     case 'admin':
       if(!isAdminUser){ go('home'); return; }
       renderAdmin();
@@ -3794,6 +4370,7 @@ function bind(){
       go(target);
       if(target === 'friends') refreshFriendsData().then(renderFriends);
       else if(target === 'admin') refreshAdminData().then(renderAdmin);
+      else if(target === 'notifications') refreshMyNotifications().then(renderNotifications);
     }));
 
   // desktop sidebar account dropdown
@@ -3906,6 +4483,30 @@ function bind(){
     render();
   });
 
+  const homeNotifBtn = $('homeNotifBtn');
+  if(homeNotifBtn) homeNotifBtn.addEventListener('click', ()=>{
+    go('notifications'); refreshMyNotifications().then(renderNotifications);
+  });
+  const notifMarkAllBtn = $('notifMarkAllBtn');
+  if(notifMarkAllBtn) notifMarkAllBtn.addEventListener('click', markAllNotificationsReadAction);
+
+  $('pushToggle').addEventListener('change', async (e)=>{
+    const wantsOn = e.target.checked;
+    e.target.disabled = true;
+    if(wantsOn){
+      const res = await enablePushNotifications();
+      if(!res.ok){
+        e.target.checked = false;
+        if(res.reason === 'denied') toast('Blocked in your browser settings for this site.');
+        else if(res.reason !== 'dismissed') toast('Could not enable push notifications right now.');
+      } else toast('Push notifications on');
+    } else {
+      await disablePushNotifications();
+      toast('Push notifications off for this device');
+    }
+    renderPushToggle();
+  });
+
   // result
   $('resultBack').addEventListener('click', ()=>{ historyViewId = null; go('home'); });
 
@@ -3919,6 +4520,7 @@ function bind(){
   $('newTournamentBtn').addEventListener('click', openNewTournamentModal);
   $('tourBack').addEventListener('click', ()=>go('tournaments'));
   $('feedbackBack').addEventListener('click', ()=>go('profile'));
+  $('notifBack').addEventListener('click', ()=>go('home'));
   $('fbStars').addEventListener('click', e=>{
     const s = e.target.closest('[data-star]');
     if(!s) return;
@@ -3957,6 +4559,44 @@ function bind(){
   $('adminTourLocationFilter').addEventListener('input', e=>{ adminTourLocationFilter = e.target.value; renderAdminTournaments(); });
   $('adminUserSearch').addEventListener('input', e=>{ adminUserSearch = e.target.value; renderAdminUsers(); });
   $('adminFeedbackTypeFilter').addEventListener('change', e=>{ adminFeedbackTypeFilter = e.target.value; renderAdminFeedback(); });
+
+  // admin: notifications compose form
+  $('notifTemplateSelect').addEventListener('change', e=>{
+    const t = adminNotifTemplates.find(x=>x.id === e.target.value);
+    if(t){
+      $('notifType').value = t.type || 'announcement';
+      $('notifTitle').value = t.titleTemplate || '';
+      $('notifMessage').value = t.messageTemplate || '';
+      $('notifActionType').value = t.actionType || 'none';
+    }
+    updateNotifFieldVisibility();
+  });
+  $('notifType').addEventListener('change', updateNotifPreview);
+  $('notifTitle').addEventListener('input', updateNotifPreview);
+  $('notifMessage').addEventListener('input', updateNotifPreview);
+  $('notifImageUrl').addEventListener('input', updateNotifPreview);
+  $('notifActionType').addEventListener('change', updateNotifFieldVisibility);
+  $('notifActionTarget').addEventListener('input', updateNotifPreview);
+  $('notifAudienceType').addEventListener('change', updateNotifFieldVisibility);
+  $('notifAudienceCountry').addEventListener('input', updateNotifAudienceCount);
+  $('notifAudienceCity').addEventListener('input', updateNotifAudienceCount);
+  $('notifUserSearchBtn').addEventListener('click', async ()=>{
+    const q = $('notifUserSearch').value.trim();
+    if(!q) return;
+    notifUserSearchResults = await searchProfiles(q);
+    renderNotifUserSearchResults();
+  });
+  $('notifUserSearch').addEventListener('keydown', e=>{ if(e.key === 'Enter') $('notifUserSearchBtn').click(); });
+  $('notifClearSelectedBtn').addEventListener('click', ()=>{
+    notifSelectedUserPicks = [];
+    renderNotifSelectedChips();
+    updateNotifAudienceCount();
+  });
+  $('notifScheduleToggle').addEventListener('change', e=>{
+    $('notifScheduleFields').classList.toggle('hidden', !e.target.checked);
+  });
+  $('notifSaveTemplateBtn').addEventListener('click', openSaveTemplateModal);
+  $('notifSendBtn').addEventListener('click', handleNotifSendClick);
 
   // profile
   $('saveProfileBtn').addEventListener('click', saveProfileForm);
@@ -4064,6 +4704,7 @@ function bind(){
     }
     else if(a === 'go-friends'){ go('friends'); refreshFriendsData().then(renderFriends); }
     else if(a === 'go-admin'){ go('admin'); refreshAdminData().then(renderAdmin); }
+    else if(a === 'go-notifications'){ go('notifications'); refreshMyNotifications().then(renderNotifications); }
     else if(a === 'go-profile') go('profile');
     else if(a === 'go-auth') go('auth');
     else if(a === 'send-friend') sendFriendReq(el.dataset.uid);
@@ -4085,6 +4726,8 @@ function bind(){
     else if(a === 'admin-stop-live') adminStopLiveAction(el.dataset.id);
     else if(a === 'admin-suspend-organiser') adminSuspendOrganiserPrompt(el.dataset.id, el.dataset.name);
     else if(a === 'admin-review-feedback') adminReviewFeedbackAction(el.dataset.id, el.dataset.status);
+    else if(a === 'admin-open-notification') openAdminNotificationDetail(el.dataset.id);
+    else if(a === 'admin-cancel-notification') adminCancelNotificationAction(el.dataset.id);
   });
 }
 
@@ -4168,10 +4811,25 @@ async function boot(){
         await refreshFriendsData();
         if(isAdminUser) await refreshAdminData();
         await runDailyCheckIn();
+
+        notifUnreadCount = await fetchUnreadNotificationCount();
+        updateNotifBadges();
+        if(notifUnsub) notifUnsub();
+        // Live badge updates while this tab is open — a push notification
+        // landing wakes a *closed* tab; this covers "already looking at the
+        // app right now" instead (see watchMyNotifications' own comment).
+        notifUnsub = watchMyNotifications(async ()=>{
+          notifUnreadCount = await fetchUnreadNotificationCount();
+          updateNotifBadges();
+          if(screen === 'notifications'){ myNotifications = await fetchMyNotifications(); renderNotifications(); }
+        });
       } else {
         cloudMatches = [];
         myPublicProfile = null; isAdminUser = false; myConnections = []; pendingApps = [];
         $('sideAdminBtn').classList.add('hidden');
+        myNotifications = []; notifUnreadCount = 0;
+        if(notifUnsub){ notifUnsub(); notifUnsub = null; }
+        updateNotifBadges();
       }
       render();
     });
@@ -4184,11 +4842,21 @@ async function boot(){
   const params = new URLSearchParams(location.search);
   const deep = params.get('go');
   const tourDeep = params.get('tour');
-  const allowed = ['setup','tournaments','stats','teams','history','profile'];
+  // ?player=<uid> — the other notification deep link that needs an id
+  // rather than a fixed screen name (see buildDeepLink() in
+  // supabase/functions/_shared/notify.ts). Same "works for guests" shape as
+  // ?tour= above: viewing a public profile never required an account.
+  const playerDeep = params.get('player');
+  const allowed = ['setup','tournaments','stats','teams','history','profile','notifications'];
 
   if(tourDeep){
     history.replaceState({}, '', location.pathname);
     openTournamentView(tourDeep); // sets its own loading state and calls render()
+    return;
+  }
+  if(playerDeep){
+    history.replaceState({}, '', location.pathname);
+    openPlayerProfile({ uid: playerDeep });
     return;
   }
 
@@ -4214,6 +4882,12 @@ async function boot(){
 
   if(deep || oauthError) history.replaceState({}, '', location.pathname);
   render();
+  // Deep-linking straight into the notification center (?go=notifications,
+  // e.g. from a push notification's own "open notification center" action)
+  // has no tabnav click to fetch on the way in — render() above paints
+  // whatever's already in myNotifications (empty on a cold boot), so this
+  // fetches for real and repaints once it lands, same content either way.
+  if(screen === 'notifications') refreshMyNotifications().then(renderNotifications);
 }
 
 function mergeById(localArr, cloudArr){

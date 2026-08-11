@@ -738,6 +738,321 @@ alter table public.profiles add column if not exists bowling_style text not null
 alter table public.profiles add column if not exists primary_role  text not null default '' check (char_length(primary_role) <= 20);
 
 -- ---------------------------------------------------------------------------
+-- Admin Push Notification & Announcement system.
+--
+-- Audience honesty note: teams and tournaments are stored as a single jsonb
+-- blob per row (see the matches/teams/tournaments/events loop above), and
+-- their rosters are free-text player names, not foreign keys to auth.users.
+-- There is also no "followers" table. That means "team members" and
+-- "tournament followers" CANNOT be resolved to real recipients today — so
+-- this schema deliberately does not offer them as an audience_type. Only
+-- audiences resolvable from real columns on `profiles` are supported: all
+-- users, players (non-organisers), organisers, country, city/district,
+-- specific users. See resolve_notification_audience() below — extending it
+-- to teams/tournaments later just needs those rosters linked to real user
+-- ids first, no other schema change.
+--
+--   notification_templates   reusable title/message templates (admin-only)
+--   notifications             one row per send/campaign, owned by an admin
+--   notification_recipients   one row per (notification, user) — powers the
+--                              in-app notification center: read/unread state
+--   notification_devices      FCM registration tokens, one row per browser/
+--                              device a user has granted push permission on
+--
+-- Actual push delivery (calling FCM) happens from a Supabase Edge Function
+-- using the service role key + an FCM service-account secret — NEVER from
+-- the browser. See supabase/functions/send-notification in the repo. This
+-- file only creates the tables/RLS/audience-resolution the Edge Function and
+-- the admin panel both read and write.
+-- ---------------------------------------------------------------------------
+
+create table if not exists public.notification_templates (
+  id              uuid primary key default gen_random_uuid(),
+  name            text not null check (char_length(name) between 1 and 80),
+  type            text not null default 'announcement' check (type in (
+                    'announcement','cricket_news','tournament','live_match',
+                    'match_result','team','player','reward','important_update',
+                    'maintenance','custom'
+                  )),
+  title_template  text not null check (char_length(title_template) between 1 and 120),
+  message_template text not null check (char_length(message_template) between 1 and 500),
+  action_type     text not null default 'none' check (action_type in (
+                    'none','open_tournament','open_live_match','open_player',
+                    'open_notifications','open_home'
+                  )),
+  created_by      uuid references auth.users(id),
+  created_at      timestamptz not null default now(),
+  updated_at      timestamptz not null default now()
+);
+
+alter table public.notification_templates enable row level security;
+
+-- Templates are an admin authoring tool, not user-facing content — nobody
+-- but an admin ever reads this table directly (a sent notification's own
+-- title/message is copied onto the `notifications` row itself, so a
+-- recipient never needs template access to see their notification).
+drop policy if exists "admin has full access to templates" on public.notification_templates;
+create policy "admin has full access to templates"
+  on public.notification_templates for all
+  using (public.is_admin())
+  with check (public.is_admin());
+
+create table if not exists public.notifications (
+  id                uuid primary key default gen_random_uuid(),
+  type              text not null default 'announcement' check (type in (
+                      'announcement','cricket_news','tournament','live_match',
+                      'match_result','team','player','reward','important_update',
+                      'maintenance','custom'
+                    )),
+  title             text not null check (char_length(title) between 1 and 120),
+  message           text not null check (char_length(message) between 1 and 500),
+  image_url         text,
+  action_type       text not null default 'none' check (action_type in (
+                      'none','open_tournament','open_live_match','open_player',
+                      'open_notifications','open_home'
+                    )),
+  -- id of the tournament/live match/player this points at; unused (null) for
+  -- action types that don't need a target (open_notifications, open_home).
+  action_target     text,
+  audience_type     text not null check (audience_type in (
+                      'all','players','organisers','country','city','selected','user'
+                    )),
+  -- {} for all/players/organisers; {country:'Pakistan'} for country;
+  -- {district:'Lahore'} for city; {user_ids:[...]} for selected;
+  -- {user_id:'...'} for a single specific user.
+  audience_filter   jsonb not null default '{}'::jsonb,
+  template_id       uuid references public.notification_templates(id),
+  created_by        uuid not null references auth.users(id),
+  -- FCM only ever confirms a message was *submitted* to Google's servers,
+  -- never that it reached or was seen on a device — "delivered"/"read" in
+  -- the FCM sense would overclaim, so the counts below are named for what's
+  -- actually true (see the Edge Function for how these get set).
+  status            text not null default 'draft' check (status in (
+                      'draft','scheduled','sending','sent','partially_failed',
+                      'failed','cancelled'
+                    )),
+  scheduled_at      timestamptz,
+  sent_at           timestamptz,
+  recipients_total  integer not null default 0,
+  push_submitted    integer not null default 0,
+  push_failed       integer not null default 0,
+  error_message     text,
+  created_at        timestamptz not null default now(),
+  updated_at        timestamptz not null default now()
+);
+
+alter table public.notifications enable row level security;
+
+-- Admins see every notification (History tab). A regular user can see a
+-- notification's own content only if they're an actual recipient of it —
+-- this is what lets the in-app Notification Center join recipient rows back
+-- to title/message/type/action without a second admin-only fetch.
+drop policy if exists "admin or recipient can read a notification" on public.notifications;
+create policy "admin or recipient can read a notification"
+  on public.notifications for select
+  using (
+    public.is_admin()
+    or exists(
+      select 1 from public.notification_recipients nr
+      where nr.notification_id = notifications.id and nr.user_id = auth.uid()
+    )
+  );
+
+drop policy if exists "admin can create a notification" on public.notifications;
+create policy "admin can create a notification"
+  on public.notifications for insert
+  with check (public.is_admin() and created_by = auth.uid());
+
+-- Covers the admin panel editing a draft or cancelling a scheduled send. The
+-- Edge Function itself writes status/sent_at/recipients_total/push_* using
+-- the service role key, which bypasses RLS entirely, so this policy is only
+-- ever exercised by the admin's own browser session.
+drop policy if exists "admin can update a notification" on public.notifications;
+create policy "admin can update a notification"
+  on public.notifications for update
+  using (public.is_admin())
+  with check (public.is_admin());
+
+drop policy if exists "admin can delete a notification" on public.notifications;
+create policy "admin can delete a notification"
+  on public.notifications for delete
+  using (public.is_admin());
+
+-- One row per (notification, user) — this table alone is what the in-app
+-- Notification Center reads: it's the user's inbox, read/unread state and
+-- all. Deliberately separate from push delivery bookkeeping (notifications.
+-- push_submitted/push_failed above): a user with no registered device still
+-- gets a row here and sees the notification next time they open the app.
+create table if not exists public.notification_recipients (
+  id              uuid primary key default gen_random_uuid(),
+  notification_id uuid not null references public.notifications(id) on delete cascade,
+  user_id         uuid not null references auth.users(id) on delete cascade,
+  read_at         timestamptz,
+  dismissed_at    timestamptz,
+  created_at      timestamptz not null default now(),
+  unique (notification_id, user_id)
+);
+
+alter table public.notification_recipients enable row level security;
+
+drop policy if exists "recipient or admin can read a recipient row" on public.notification_recipients;
+create policy "recipient or admin can read a recipient row"
+  on public.notification_recipients for select
+  using (user_id = auth.uid() or public.is_admin());
+
+-- A user may mark their own notification read/dismissed — nothing else on
+-- the row is meant to move, so notification_id and user_id are locked to
+-- their existing values (same "allow-list the mutable fields" pattern as the
+-- profiles update policy above), stopping someone from reassigning a
+-- recipient row to a different notification or claiming someone else's.
+drop policy if exists "recipient can update read/dismissed state on their own row" on public.notification_recipients;
+create policy "recipient can update read/dismissed state on their own row"
+  on public.notification_recipients for update
+  using (user_id = auth.uid())
+  with check (
+    user_id = auth.uid()
+    and notification_id = (select notification_id from public.notification_recipients r where r.id = notification_recipients.id)
+  );
+
+-- No insert policy for the authenticated/anon role at all: recipient rows
+-- are only ever fanned out by the Edge Function using the service role key
+-- (which bypasses RLS), never inserted directly from a browser — not even
+-- an admin's. Keeps a broadcast to thousands of users from ever becoming
+-- thousands of individual inserts from someone's phone.
+
+create table if not exists public.notification_devices (
+  -- The FCM registration token itself is the primary key: it identifies one
+  -- browser/app install, not a person. If the same browser signs in as a
+  -- different user later, upserting here correctly re-points that token at
+  -- the new owner instead of accumulating duplicate rows for a stale user.
+  fcm_token    text primary key,
+  user_id      uuid not null references auth.users(id) on delete cascade,
+  platform     text not null default 'web' check (platform in ('web','android','ios')),
+  -- Best-effort browser/OS label for the user's own "manage devices" list —
+  -- never a hardware identifier, never shown to anyone but the owner.
+  device_label text not null default '',
+  last_seen    timestamptz not null default now(),
+  created_at   timestamptz not null default now(),
+  updated_at   timestamptz not null default now()
+);
+
+alter table public.notification_devices enable row level security;
+
+-- Owner-only, full stop — not even admins can read raw FCM tokens through
+-- the API (per "do not expose device tokens publicly"). The Edge Function
+-- reads them using the service role key, which bypasses RLS entirely, so it
+-- never needs a policy granting it access here.
+drop policy if exists "owner has full access to their own devices" on public.notification_devices;
+create policy "owner has full access to their own devices"
+  on public.notification_devices for all
+  using (user_id = auth.uid())
+  with check (user_id = auth.uid());
+
+-- ---------------------------------------------------------------------------
+-- resolve_notification_audience() — the single source of truth for "who is
+-- in audience X", used by the admin panel's pre-send "Send to N users?"
+-- preview count. Admin-only (raises if not public.is_admin()), reads only
+-- real profiles columns — no fake segments.
+--
+-- The Edge Function does NOT call this over RPC (a service-role caller has
+-- no auth.uid(), so public.is_admin() would always be false for it) — it
+-- runs the equivalent filter directly against the database using the
+-- service role key, which bypasses RLS. Keep both in sync if you add a new
+-- audience_type; the Edge Function's copy is in
+-- supabase/functions/send-notification/index.ts (resolveAudience()).
+-- ---------------------------------------------------------------------------
+create or replace function public.resolve_notification_audience(p_audience_type text, p_filter jsonb default '{}'::jsonb)
+returns setof uuid
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  if not public.is_admin() then
+    raise exception 'not authorized';
+  end if;
+
+  if p_audience_type = 'all' then
+    return query select id from public.profiles;
+  elsif p_audience_type = 'players' then
+    return query select id from public.profiles where is_organiser = false;
+  elsif p_audience_type = 'organisers' then
+    return query select id from public.profiles where is_organiser = true;
+  elsif p_audience_type = 'country' then
+    return query select id from public.profiles
+      where p_filter->>'country' is not null and lower(country) = lower(p_filter->>'country');
+  elsif p_audience_type = 'city' then
+    return query select id from public.profiles
+      where p_filter->>'district' is not null and lower(district) = lower(p_filter->>'district');
+  elsif p_audience_type = 'selected' then
+    return query select id from public.profiles
+      where id = any(
+        (select array_agg((x)::uuid) from jsonb_array_elements_text(coalesce(p_filter->'user_ids', '[]'::jsonb)) x)
+      );
+  elsif p_audience_type = 'user' then
+    return query select id from public.profiles where id = (p_filter->>'user_id')::uuid;
+  else
+    raise exception 'unknown audience_type: %', p_audience_type;
+  end if;
+end;
+$$;
+
+-- Admin dashboard's "active devices" stat needs a count, not the tokens
+-- themselves — notification_devices intentionally has no admin read policy
+-- at all (raw FCM tokens stay owner-only, full stop), so a narrow
+-- SECURITY DEFINER function that returns only a number, never a row, is
+-- what lets the summary card be honest without opening that table up.
+create or replace function public.count_registered_devices()
+returns bigint
+language sql
+security definer
+set search_path = public
+stable
+as $$
+  select case when public.is_admin() then (select count(*) from public.notification_devices) else 0 end;
+$$;
+
+-- Realtime: lets the notification bell update the unread badge live while
+-- the app is open in a tab, without polling. Push (FCM) is still what wakes
+-- a closed/backgrounded app — this only covers "already looking at the app
+-- in another tab right now".
+do $$
+begin
+  alter publication supabase_realtime add table public.notification_recipients;
+exception
+  when duplicate_object then null;
+end $$;
+
+-- ---------------------------------------------------------------------------
+-- Scheduled sends: a `notifications` row with status='scheduled' and a
+-- future scheduled_at is only a database record until something actually
+-- triggers delivery — this app has no long-running server to run a setTimeout
+-- against, so it needs Supabase's own cron mechanism. Requires the pg_cron
+-- and pg_net extensions (Database -> Extensions in the dashboard; available
+-- on Supabase's paid plans, not reliably on the free tier). Uncomment and
+-- fill in your project ref + a service-role-scoped secret once the
+-- send-notification Edge Function (below) is deployed:
+--
+--   select cron.schedule(
+--     'dispatch-scheduled-notifications',
+--     '* * * * *',  -- every minute
+--     $$
+--       select net.http_post(
+--         url := 'https://<your-project-ref>.supabase.co/functions/v1/dispatch-scheduled',
+--         headers := jsonb_build_object(
+--           'Authorization', 'Bearer <service-role-key-stored-as-a-vault-secret>',
+--           'Content-Type', 'application/json'
+--         )
+--       );
+--     $$
+--   );
+--
+-- See supabase/functions/dispatch-scheduled/index.ts — it finds due rows
+-- (status='scheduled' and scheduled_at <= now()) and calls the same send
+-- logic as an immediate send.
+-- ---------------------------------------------------------------------------
+
+-- ---------------------------------------------------------------------------
 -- Bootstrap: run this yourself once, after you've signed up in the app, to
 -- become the first admin. Replace with your actual auth user id.
 -- ---------------------------------------------------------------------------
