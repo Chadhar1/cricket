@@ -4089,7 +4089,34 @@ function bind(){
 }
 
 /* ---------------- BOOT ---------------- */
+
+/* Google (or any OAuth) redirect that fails or gets cancelled comes back to
+   this same page with `error`/`error_description` in the URL — implicit
+   flow (this app's default; see cloud.js signInGoogle's comment) puts them
+   in the hash, some failure modes put them in the query string instead, so
+   both are checked. Supabase's own detectSessionInUrl handling strips these
+   once it's processed the return trip, so this has to run before initCloud()
+   creates the client, or there'd be nothing left to read. Returns null on an
+   ordinary page load (no OAuth redirect happened), never on Google errors
+   escaped by throwing — that would kill boot() over something recoverable. */
+function readOAuthErrorFromUrl(){
+  const hash = new URLSearchParams(location.hash.replace(/^#/, ''));
+  const query = new URLSearchParams(location.search);
+  const errorCode = hash.get('error_code') || hash.get('error') || query.get('error_code') || query.get('error');
+  if(!errorCode) return null;
+  return { errorCode, errorDesc: hash.get('error_description') || query.get('error_description') || '' };
+}
+function googleErrorText({ errorCode, errorDesc }){
+  const d = (errorCode + ' ' + errorDesc).toLowerCase();
+  if(d.includes('access_denied') || d.includes('cancel')) return 'Google sign-in was cancelled.';
+  if(d.includes('provider') || d.includes('not enabled') || d.includes('redirect') || d.includes('invalid'))
+    return 'Authentication configuration error. Please contact support.';
+  return 'Google sign-in failed. Please try again.';
+}
+
 async function boot(){
+  const oauthError = readOAuthErrorFromUrl();
+
   teams = load(K.teams, []);
   tournaments = load(K.tours, []);
   events = load(K.events, []);
@@ -4171,9 +4198,21 @@ async function boot(){
   // blank sign-in screen with no explanation. Set the *intended* screen and
   // let render()'s single gate check (below, same one every other
   // navigation already goes through) redirect with the proper reason.
-  screen = (deep && allowed.includes(deep)) ? deep : 'home';
+  // A failed/cancelled Google redirect wins over the usual routing: send the
+  // user back to the sign-in screen with a real explanation instead of
+  // quietly landing on Home looking signed out with no idea why. Only fires
+  // when sign-in genuinely didn't happen — getUser() is already populated
+  // by initCloud()'s session recovery above by this point, so a *successful*
+  // Google sign-in (which also leaves stray params on some redirect paths)
+  // never gets overridden into an error screen.
+  if(oauthError && !getUser()){
+    screen = 'auth';
+    authMsg(googleErrorText(oauthError));
+  } else {
+    screen = (deep && allowed.includes(deep)) ? deep : 'home';
+  }
 
-  if(deep) history.replaceState({}, '', location.pathname);
+  if(deep || oauthError) history.replaceState({}, '', location.pathname);
   render();
 }
 

@@ -97,7 +97,29 @@ export async function changeDisplayName(name){
   await sb.from('profiles').update({ display_name: name }).eq('id', currentUser.id);
 }
 
-/* ---------------- auth: Google ---------------- */
+/* ---------------- auth: Google ----------------
+   For this to actually complete (not just open Google's screen and then
+   silently fail to return a session), three separate places have to agree —
+   this code can't fix any of them, they're dashboard config, not app code:
+
+   1. Supabase dashboard -> Authentication -> Providers -> Google: enabled,
+      with a Client ID + Client Secret from Google Cloud Console.
+   2. Google Cloud Console -> the OAuth Client's "Authorized redirect URIs"
+      must contain the *Supabase* callback URL
+      (https://<project-ref>.supabase.co/auth/v1/callback) — NOT this app's
+      own URL. Pointing it at the Vercel domain instead is the single most
+      common way this breaks.
+   3. Supabase dashboard -> Authentication -> URL Configuration: the app's
+      real production URL (and any preview/staging URLs) must be in
+      "Redirect URLs", and "Site URL" must not still be the localhost
+      default — otherwise Supabase completes the Google side fine but then
+      bounces the user somewhere that isn't this app.
+
+   When any of the three is wrong, Supabase appends `error`/`error_description`
+   to the URL it redirects back to instead of throwing anything this file's
+   callers could catch — see readOAuthErrorFromUrl() in app.js, which reads
+   those params on boot and turns them into the message the user actually
+   sees on the sign-in screen. */
 
 export async function signInGoogle(){
   requireCloud();
@@ -128,6 +150,14 @@ export function authErrorText(err){
   if(m.includes('rate limit')) return 'Too many attempts. Wait a minute and try again.';
   if(m.includes('network')) return 'Network problem. Check your connection.';
   if(m.includes('popup') || m.includes('redirect')) return 'Sign-in window was closed or blocked.';
+  // Surfaces straight from Supabase when the Google provider isn't switched
+  // on in the dashboard, or when the OAuth redirect URL isn't on the
+  // project's allow-list — both are one-time dashboard config problems, not
+  // something a retry fixes, so word it as a config error rather than a
+  // generic failure (see cloud.js Google OAuth section for the checklist).
+  if(m.includes('provider is not enabled') || m.includes('unsupported provider') || m.includes('requested path is invalid'))
+    return 'Authentication configuration error. Please contact support.';
+  if(m.includes('access_denied') || m.includes('cancelled') || m.includes('canceled')) return 'Google sign-in was cancelled.';
   return msg || 'Something went wrong.';
 }
 
