@@ -242,7 +242,37 @@ const TAB_OF = { home:'home', tournaments:'tournaments', tournament:'tournaments
                  teams:'teams', stats:'profile', history:'history', profile:'profile',
                  friends:'friends', admin:'admin', 'live-now':'live-now' };
 
-function go(s){ screen = s; render(); window.scrollTo(0,0); }
+/* Every screen-level navigation in the app funnels through here (confirmed:
+   the few call sites that used to set `screen` directly — openTournamentView,
+   openPlayerProfile — already call go() themselves; the remaining bare
+   `screen = ...` assignments are boot()'s one-time initial-screen resolution
+   and render()'s own auth-gate redirect, neither of which is a user-driven
+   "navigate to a new screen" event). That makes go() the one place that
+   needs to push a browser/WebView history entry so the hardware/gesture
+   back button has something of ours to pop — previously nothing here ever
+   touched history, so Android's back button had nowhere to go but out of
+   the app entirely (see the popstate listener below for the other half of
+   this). Guarded by `s !== screen` so re-navigating to the same screen (or
+   any of the many render()-only calls elsewhere) never inflates the stack
+   with duplicate entries. */
+function go(s){
+  if(s !== screen) history.pushState({ screen: s }, '', location.pathname);
+  screen = s; render(); window.scrollTo(0,0);
+}
+
+/* Hardware/gesture back button (and any other trigger of browser history
+   navigation) pops one of go()'s pushState entries — this just mirrors that
+   into the app's own `screen` state and repaints. Deliberately does NOT
+   call go() itself (that would push a new entry right back on, undoing the
+   pop). Falls back to 'home' when e.state is empty, which is exactly the
+   very first entry created by the initial page load (before any go() call
+   ever ran) — one more back press from there correctly exits the app, same
+   as any native screen would behave at its own root. */
+window.addEventListener('popstate', (e)=>{
+  screen = (e.state && e.state.screen) || 'home';
+  render();
+  window.scrollTo(0,0);
+});
 
 function showScreen(name){
   const isLive = match && !match.completed;
@@ -1124,7 +1154,7 @@ function renderAdmin(){
     adminLiveUnsub = watchAllLiveMatches(()=>{ if(screen === 'admin') refreshAdminLiveNow(); });
   }
 
-  ['overview','tournaments','matches','organisers','users','feedback','activity'].forEach(x=>
+  ['overview','tournaments','matches','organisers','users','feedback','notifications','activity'].forEach(x=>
     $('adminTab' + x[0].toUpperCase() + x.slice(1)).classList.toggle('hidden', x !== adminTab));
   document.querySelectorAll('#adminTabs .pill').forEach(p=>p.classList.toggle('active', p.dataset.atab === adminTab));
 
@@ -4908,7 +4938,12 @@ async function boot(){
     screen = (deep && allowed.includes(deep)) ? deep : 'home';
   }
 
-  if(deep || oauthError) history.replaceState({}, '', location.pathname);
+  // Seed the very first history entry with the screen it's actually landing
+  // on (not just {} / a bare URL strip) — so if the user navigates further
+  // via go() and then presses back all the way down, they land back on
+  // wherever they actually started (e.g. a ?go=notifications deep link),
+  // not hardcoded 'home'. See go()'s popstate listener above.
+  history.replaceState({ screen }, '', location.pathname);
   render();
   // Deep-linking straight into the notification center (?go=notifications,
   // e.g. from a push notification's own "open notification center" action)
