@@ -843,20 +843,18 @@ create table if not exists public.notifications (
 
 alter table public.notifications enable row level security;
 
--- Admins see every notification (History tab). A regular user can see a
--- notification's own content only if they're an actual recipient of it —
--- this is what lets the in-app Notification Center join recipient rows back
--- to title/message/type/action without a second admin-only fetch.
-drop policy if exists "admin or recipient can read a notification" on public.notifications;
-create policy "admin or recipient can read a notification"
-  on public.notifications for select
-  using (
-    public.is_admin()
-    or exists(
-      select 1 from public.notification_recipients nr
-      where nr.notification_id = notifications.id and nr.user_id = auth.uid()
-    )
-  );
+-- The "admin or recipient can read a notification" SELECT policy references
+-- public.notification_recipients in a subquery, so it can't be created until
+-- that table exists — Postgres validates a policy's expression at CREATE
+-- POLICY time, not lazily. It's added further down, right after
+-- notification_recipients is created (search for that policy name below).
+-- notification_recipients in turn has a foreign key back to notifications.id,
+-- so the two tables have a circular ordering requirement: notifications must
+-- exist before notification_recipients (FK), but notification_recipients
+-- must exist before notifications' own SELECT policy (subquery). Creating
+-- both tables first and only then adding every policy is what breaks the
+-- cycle — don't move that policy back up next to this table without also
+-- moving the notification_recipients table creation above it.
 
 drop policy if exists "admin can create a notification" on public.notifications;
 create policy "admin can create a notification"
@@ -894,6 +892,23 @@ create table if not exists public.notification_recipients (
 );
 
 alter table public.notification_recipients enable row level security;
+
+-- Deferred here from right after the `notifications` table above — see the
+-- comment there for why. Admins see every notification (History tab); a
+-- regular user can see a notification's own content only if they're an
+-- actual recipient of it, which is what lets the in-app Notification Center
+-- join recipient rows back to title/message/type/action without a second
+-- admin-only fetch.
+drop policy if exists "admin or recipient can read a notification" on public.notifications;
+create policy "admin or recipient can read a notification"
+  on public.notifications for select
+  using (
+    public.is_admin()
+    or exists(
+      select 1 from public.notification_recipients nr
+      where nr.notification_id = notifications.id and nr.user_id = auth.uid()
+    )
+  );
 
 drop policy if exists "recipient or admin can read a recipient row" on public.notification_recipients;
 create policy "recipient or admin can read a recipient row"
