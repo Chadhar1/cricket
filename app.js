@@ -1423,6 +1423,23 @@ function notifStatusBadgeHTML(status){
   const [cls, label] = NOTIF_STATUS_BADGE[status] || ['open', status];
   return `<span class="badge ${cls}">${label}</span>`;
 }
+/* Turns supabase-js's raw functions.invoke() error into something an admin
+   can actually act on. "Failed to send a request to the Edge Function" is
+   the SDK's own generic text for a pure network-level failure reaching
+   *any* Edge Function endpoint at all — in practice that almost always
+   means send-notification hasn't been deployed to this Supabase project
+   yet (`supabase functions deploy send-notification dispatch-scheduled`),
+   not a bug in this notification itself. Anything else (e.g. "No
+   recipients matched this audience.") is already a specific message the
+   Edge Function raised on purpose, so it's shown as-is. */
+function notifFriendlyError(err){
+  const msg = (err && err.message) || String(err || '');
+  if(/failed to send a request to the edge function/i.test(msg)){
+    return "Could not reach the notification server. The send-notification Edge Function likely hasn't been deployed to this Supabase project yet — see the setup notes for the exact deploy command.";
+  }
+  return 'Could not send — ' + (msg || 'try again');
+}
+
 function notifAudienceLabel(n){
   if(n.audienceType === 'country') return `Country: ${n.audienceFilter?.country || ''}`;
   if(n.audienceType === 'city') return `City: ${n.audienceFilter?.district || ''}`;
@@ -1491,9 +1508,10 @@ function openAdminNotificationDetail(id){
       ${n.sentAt ? `<div class="kv-row"><div class="kv-k">Sent</div><div class="kv-v">${new Date(n.sentAt).toLocaleString()}</div></div>` : ''}
       ${n.errorMessage ? `<div class="kv-row"><div class="kv-k">Note</div><div class="kv-v">${esc(n.errorMessage)}</div></div>` : ''}
     </div>
-    <div style="display:flex;gap:8px;margin-top:16px;">
+    <div style="display:flex;gap:8px;margin-top:16px;flex-wrap:wrap;">
       <button class="btn secondary" data-action="close">Close</button>
       ${n.status === 'scheduled' ? `<button class="btn danger" data-action="admin-cancel-notification" data-id="${esc(n.id)}">Cancel scheduled send</button>` : ''}
+      ${(n.status === 'draft' || n.status === 'failed' || n.status === 'partially_failed') ? `<button class="btn" data-action="admin-retry-send-notification" data-id="${esc(n.id)}">${n.status === 'draft' ? 'Send now' : 'Retry send'}</button>` : ''}
     </div>
   `);
 }
@@ -1507,6 +1525,26 @@ async function adminCancelNotificationAction(id){
     adminNotifStats = await fetchNotificationStats();
     renderAdminNotifications();
   } else toast('Could not cancel — try again');
+}
+
+/* Covers two real situations: a 'draft' row whose original Send Now never
+   actually reached the Edge Function (see notifFriendlyError() below — most
+   often this means the function isn't deployed yet), and a 'failed' /
+   'partially_failed' row where the function ran but push delivery had
+   trouble. Both are just "try sendNotificationNow again on this existing
+   row" — no need to recreate the notification from scratch. */
+async function adminRetrySendNotificationAction(id){
+  try{
+    await sendNotificationNow(id);
+    toast('Notification sent');
+  }catch(err){
+    console.error('retry send failed:', err);
+    toast(notifFriendlyError(err));
+  }
+  closeModal();
+  adminNotifHistory = await fetchNotificationHistory();
+  adminNotifStats = await fetchNotificationStats();
+  renderAdminNotifications();
 }
 
 /* ---- compose form: read current state / live preview / field visibility ---- */
@@ -1700,7 +1738,17 @@ async function confirmNotifSend(s, scheduledAt){
   }catch(err){
     console.error('send notification failed:', err);
     closeModal();
-    toast('Could not send — ' + (err && err.message ? err.message : 'try again'));
+    toast(notifFriendlyError(err));
+    // The notification row itself was already created (createNotification()
+    // succeeded — it's specifically sendNotificationNow() that failed), so
+    // it exists as a 'draft' in the database right now with no way to see
+    // or retry it unless history is refreshed. Without this it would look
+    // like the whole thing silently vanished.
+    try{
+      adminNotifHistory = await fetchNotificationHistory();
+      adminNotifStats = await fetchNotificationStats();
+      renderAdminNotifications();
+    }catch(e2){ console.error('post-failure history refresh failed:', e2); }
   }finally{
     notifSending = false;
   }
@@ -4786,6 +4834,7 @@ function bind(){
     else if(a === 'admin-review-feedback') adminReviewFeedbackAction(el.dataset.id, el.dataset.status);
     else if(a === 'admin-open-notification') openAdminNotificationDetail(el.dataset.id);
     else if(a === 'admin-cancel-notification') adminCancelNotificationAction(el.dataset.id);
+    else if(a === 'admin-retry-send-notification') adminRetrySendNotificationAction(el.dataset.id);
   });
 }
 
