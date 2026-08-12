@@ -132,6 +132,7 @@ let adminFeedbackAll = [];      // raw feedback rows
 let adminNotifTemplates = [];
 let adminNotifHistory = [];
 let adminNotifStats = { total:0, sentThisMonth:0, scheduled:0, activeDevices:0, lastBroadcast:null };
+let adminNotifLoadError = null; // isolated from adminLoadError — see refreshAdminData()
 let notifSelectedUserPicks = [];   // [{uid, displayName, handle}] — "Selected Users" audience picks
 let notifUserSearchResults = [];
 let notifSending = false;          // double-submission guard on the confirm dialog's Send button
@@ -978,12 +979,10 @@ async function refreshAdminData(){
   if(!isAdminUser) return;
   adminLoading = true; adminLoadError = null;
   try{
-    const [apps, orgCount, platformStats, tours, matchesAdmin, profilesAdmin, feedbackAll, liveNow,
-           notifTemplates, notifHistory, notifStats] = await Promise.all([
+    const [apps, orgCount, platformStats, tours, matchesAdmin, profilesAdmin, feedbackAll, liveNow] = await Promise.all([
       fetchPendingOrganiserApplications(), countOrganisers(), fetchPlatformStats(),
       fetchAllTournamentsAdmin(), fetchAllMatchesAdmin(), fetchAllProfilesAdmin(), fetchAllFeedback(),
-      fetchLiveMatchesNow(),
-      fetchNotificationTemplates(), fetchNotificationHistory(), fetchNotificationStats()
+      fetchLiveMatchesNow()
     ]);
     pendingApps = apps;
     adminOverview.organisers = orgCount;
@@ -996,9 +995,6 @@ async function refreshAdminData(){
     adminProfilesAll = profilesAdmin;
     adminFeedbackAll = feedbackAll;
     applyLiveNowSnapshot(liveNow);
-    adminNotifTemplates = notifTemplates;
-    adminNotifHistory = notifHistory;
-    adminNotifStats = notifStats;
     await resolveProfiles([
       ...pendingApps.map(a=>a.uid),
       ...tours.map(t=>t.ownerId), ...matchesAdmin.map(m=>m.ownerId), ...feedbackAll.map(f=>f.user_id)
@@ -1011,6 +1007,27 @@ async function refreshAdminData(){
     adminLoadError = err;
   } finally {
     adminLoading = false;
+  }
+
+  // Notifications are fetched in their own isolated try/catch, deliberately
+  // separate from the Promise.all above. Notifications is a newer,
+  // independently-migrated feature (supabase.sql's notification section) —
+  // on a deployment where that migration hasn't been run yet, the
+  // 'notifications' table simply doesn't exist, and fetchNotificationHistory
+  // throws (by design, see its own comment). That must never blank out
+  // Tournaments/Matches/Organisers/Users/Feedback along with it, which is
+  // exactly what happened when this used to share the Promise.all above.
+  adminNotifLoadError = null;
+  try{
+    const [notifTemplates, notifHistory, notifStats] = await Promise.all([
+      fetchNotificationTemplates(), fetchNotificationHistory(), fetchNotificationStats()
+    ]);
+    adminNotifTemplates = notifTemplates;
+    adminNotifHistory = notifHistory;
+    adminNotifStats = notifStats;
+  }catch(err){
+    console.error('refreshAdminData (notifications) failed:', err);
+    adminNotifLoadError = err;
   }
 }
 
@@ -1384,6 +1401,16 @@ function notifAudienceLabel(n){
 }
 
 function renderAdminNotifications(){
+  const errBox = $('notifErrorBox');
+  errBox.classList.toggle('hidden', !adminNotifLoadError);
+  if(adminNotifLoadError){
+    const detailEl = $('notifErrorDetail');
+    const detail = adminNotifLoadError.message
+      ? adminNotifLoadError.message + (adminNotifLoadError.code ? ' (code ' + adminNotifLoadError.code + ')' : '')
+      : String(adminNotifLoadError);
+    detailEl.textContent = detail;
+    detailEl.classList.toggle('hidden', !detail);
+  }
   $('notifStatTotal').textContent = adminNotifStats.total;
   $('notifStatSentMonth').textContent = adminNotifStats.sentThisMonth;
   $('notifStatScheduled').textContent = adminNotifStats.scheduled;
@@ -4559,6 +4586,7 @@ function bind(){
   $('adminTourLocationFilter').addEventListener('input', e=>{ adminTourLocationFilter = e.target.value; renderAdminTournaments(); });
   $('adminUserSearch').addEventListener('input', e=>{ adminUserSearch = e.target.value; renderAdminUsers(); });
   $('adminFeedbackTypeFilter').addEventListener('change', e=>{ adminFeedbackTypeFilter = e.target.value; renderAdminFeedback(); });
+  $('notifRetryBtn').addEventListener('click', ()=>refreshAdminData().then(renderAdmin));
 
   // admin: notifications compose form
   $('notifTemplateSelect').addEventListener('change', e=>{

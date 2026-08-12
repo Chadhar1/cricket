@@ -1212,6 +1212,12 @@
 
   <!-- Notifications -->
   <div id="adminTabNotifications" class="hidden">
+    <div class="card hidden" id="notifErrorBox" style="border-color:var(--danger, #c0392b);">
+      <div style="font-weight:700;">Unable to load notifications</div>
+      <div class="stat-dim" id="notifErrorText" style="margin-top:4px;">Something went wrong talking to the database.</div>
+      <div class="stat-dim hidden" id="notifErrorDetail" style="margin-top:6px;font-family:monospace;font-size:11px;word-break:break-word;"></div>
+      <button class="btn secondary" id="notifRetryBtn" style="margin-top:10px;">Try again</button>
+    </div>
     <div class="stat-strip">
       <div class="stat-box"><div class="sv" id="notifStatTotal">0</div><div class="sl">Total</div></div>
       <div class="stat-box"><div class="sv" id="notifStatSentMonth">0</div><div class="sl">Sent this month</div></div>
