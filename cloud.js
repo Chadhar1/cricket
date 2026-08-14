@@ -21,6 +21,21 @@ let sb = null;
 let currentUser = null;
 let currentSession = null;
 let authCallbacks = [];
+/* Password-recovery-link callbacks — separate from authCallbacks because
+   these fire on a distinct Supabase auth *event*, not a user/session change
+   (PASSWORD_RECOVERY still carries a real, signed-in session — that's how
+   the recovery link works — so authCallbacks also fires for it; app.js
+   needs to tell "signed in normally" apart from "signed in via a password
+   reset link, still needs to actually set a new password"). */
+let recoveryCallbacks = [];
+/* PASSWORD_RECOVERY can fire during initCloud() itself — Supabase processes
+   the recovery link's token as soon as the client is created (that's what
+   detectSessionInUrl does) — which is BEFORE boot() gets a chance to call
+   onPasswordRecovery() below. Without this flag, a callback registered
+   after the fact would simply miss a one-time event that already happened.
+   onPasswordRecovery() checks this and replays immediately if so, same
+   spirit as onAuth()'s replay-on-registration behavior above. */
+let recoveryFired = false;
 
 /* ---------------- init ---------------- */
 
@@ -36,10 +51,14 @@ export async function initCloud(){
     currentSession = session;
     currentUser = session ? session.user : null;
 
-    sb.auth.onAuthStateChange((_event, session)=>{
+    sb.auth.onAuthStateChange((event, session)=>{
       currentSession = session;
       currentUser = session ? session.user : null;
       authCallbacks.forEach(cb=>{ try{ cb(currentUser); }catch(e){ console.error(e); } });
+      if(event === 'PASSWORD_RECOVERY'){
+        recoveryFired = true;
+        recoveryCallbacks.forEach(cb=>{ try{ cb(); }catch(e){ console.error(e); } });
+      }
     });
 
     ready = true;
@@ -57,6 +76,18 @@ export function onAuth(cb){
   authCallbacks.push(cb);
   if(ready) cb(currentUser);
   return ()=>{ authCallbacks = authCallbacks.filter(f=>f!==cb); };
+}
+
+/* Fires once when the app loads a password-recovery link (never on an
+   ordinary sign-in) — see the PASSWORD_RECOVERY branch in initCloud()
+   above. Doesn't replay on registration the way onAuth does, since there's
+   nothing to replay: by the time app.js can call this, initCloud() has
+   already finished and the one-shot recovery event has already fired or
+   didn't happen this page load. */
+export function onPasswordRecovery(cb){
+  recoveryCallbacks.push(cb);
+  if(recoveryFired) cb();
+  return ()=>{ recoveryCallbacks = recoveryCallbacks.filter(f=>f!==cb); };
 }
 
 /* No separate redirect-resume step needed — detectSessionInUrl above handles
@@ -86,9 +117,30 @@ export async function signInEmail(email, password){
   return data.user;
 }
 
+/* Without an explicit redirectTo, Supabase falls back to the project's
+   "Site URL" (Authentication -> URL Configuration in the dashboard), which
+   for most projects is still whatever localhost dev address it had at
+   creation — that's exactly what sent every reset email to a dead
+   localhost:3000 link. Passing this here, same pattern as signInGoogle()
+   below, makes the emailed link point at wherever the app is actually
+   running instead. NOTE: this alone isn't enough — the target URL also has
+   to be on the project's Redirect URLs allow-list in that same dashboard
+   page, or Supabase silently falls back to the Site URL anyway. */
 export async function sendReset(email){
   requireCloud();
-  const { error } = await sb.auth.resetPasswordForEmail(email.trim());
+  const { error } = await sb.auth.resetPasswordForEmail(email.trim(), {
+    redirectTo: window.location.origin + window.location.pathname
+  });
+  if(error) throw error;
+}
+
+/* Called once the app has detected a PASSWORD_RECOVERY session (see
+   onPasswordRecovery above) and the user has typed a new password. The
+   recovery link itself already established a real, if short-lived, session
+   — that's what authorizes this update, no separate re-auth needed. */
+export async function updatePassword(newPassword){
+  requireCloud();
+  const { error } = await sb.auth.updateUser({ password: newPassword });
   if(error) throw error;
 }
 

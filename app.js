@@ -34,6 +34,7 @@ import {
 import {
   initCloud, cloudReady, getUser, onAuth, resumeRedirect,
   signUpEmail, signInEmail, sendReset, signInGoogle, signOutUser,
+  onPasswordRecovery, updatePassword,
   authErrorText, changeDisplayName,
   fetchProfile, saveProfile,
   saveMatchToCloud, fetchCloudMatches,
@@ -461,6 +462,39 @@ async function doReset(){
     await sendReset(email);
     authMsg('Password reset link sent to ' + email, true);
   }catch(err){ authMsg(authErrorText(err)); }
+}
+
+/* Opened once when boot() detects a PASSWORD_RECOVERY session (the user
+   followed a valid, unexpired reset-email link) — see onPasswordRecovery()
+   in cloud.js. The recovery link itself already signed them in with a
+   short-lived session; this is just the "now actually pick a new password"
+   step nothing in this app previously asked for, which is why reset links
+   looked "successful" but never let anyone actually change anything. */
+function openResetPasswordModal(){
+  openModal(`<h3>Set a new password</h3>
+    <div class="stat-dim" style="margin-bottom:10px;">You followed a password reset link. Choose a new password to finish.</div>
+    <label>New password</label>
+    <input type="password" id="newPasswordInput" placeholder="At least 6 characters" autocomplete="new-password">
+    <label style="margin-top:10px;">Confirm password</label>
+    <input type="password" id="newPasswordConfirm" placeholder="Type it again" autocomplete="new-password">
+    <div class="stat-dim" id="newPasswordMsg" style="margin-top:8px;"></div>
+    <button class="btn primary" data-action="submit-new-password" style="margin-top:14px;">Set password</button>`);
+}
+
+async function submitNewPasswordAction(){
+  const pw = $('newPasswordInput')?.value || '';
+  const confirm = $('newPasswordConfirm')?.value || '';
+  const msgEl = $('newPasswordMsg');
+  if(pw.length < 6){ msgEl.textContent = 'Password must be at least 6 characters.'; return; }
+  if(pw !== confirm){ msgEl.textContent = "Passwords don't match."; return; }
+  msgEl.textContent = '';
+  try{
+    await updatePassword(pw);
+    closeModal();
+    toast('Password updated');
+  }catch(err){
+    msgEl.textContent = authErrorText(err);
+  }
 }
 
 /* ---------------- push notifications ----------------
@@ -5593,6 +5627,7 @@ function bind(){
     else if(a === 'decline-team-invite') respondTeamInviteAction(el.dataset.teamId, false);
     else if(a === 'open-announce-tour') openAnnounceTourModal();
     else if(a === 'send-announce-tour') sendAnnounceTourAction();
+    else if(a === 'submit-new-password') submitNewPasswordAction();
     else if(a === 'open-report-dispute') openReportDisputeModal();
     else if(a === 'submit-dispute') submitDisputeAction();
     else if(a === 'resolve-dispute') resolveDisputeAction(el.dataset.id, el.dataset.status);
@@ -5652,8 +5687,18 @@ function readOAuthErrorFromUrl(){
   if(!errorCode) return null;
   return { errorCode, errorDesc: hash.get('error_description') || query.get('error_description') || '' };
 }
+/* Handles both Google's OAuth error redirect AND a password-reset/magic
+   link's error redirect — Supabase puts both in the exact same
+   #error=...&error_code=...&error_description=... shape, so one function
+   has to tell them apart. otp_expired specifically means "the link itself
+   is dead" (expired, or already used once — Supabase reset links are
+   single-use) — true for a stale password-reset email just as much as a
+   magic link, and completely unrelated to Google, so it's checked first
+   regardless of which flow the user was actually in. */
 function googleErrorText({ errorCode, errorDesc }){
   const d = (errorCode + ' ' + errorDesc).toLowerCase();
+  if(d.includes('otp_expired') || d.includes('link is invalid') || d.includes('link has expired'))
+    return 'That link has expired or was already used. Request a new password reset email and use it right away.';
   if(d.includes('access_denied') || d.includes('cancel')) return 'Google sign-in was cancelled.';
   if(d.includes('provider') || d.includes('not enabled') || d.includes('redirect') || d.includes('invalid'))
     return 'Authentication configuration error. Please contact support.';
@@ -5682,6 +5727,12 @@ async function boot(){
     joinPresence();
 
     await resumeRedirect();
+    // Fires once if (and only if) this page load is a password-reset link
+    // — see cloud.js's onPasswordRecovery/PASSWORD_RECOVERY comment. Modal,
+    // not a screen, so it layers over whatever screen boot() would have
+    // otherwise landed on (still 'home' underneath) rather than needing its
+    // own route.
+    onPasswordRecovery(()=>openResetPasswordModal());
     onAuth(async (user)=>{
       if(user){
         const p = await fetchProfile();
