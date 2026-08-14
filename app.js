@@ -1212,6 +1212,32 @@ function staleness(iso){
   return { cls:'stale-danger', label:'🔴 Potentially stale' };
 }
 
+/* Turns whatever refreshAdminData() caught into a readable line, no matter
+   its shape. A real Postgrest/Postgres error has `.message` (+ `.code`,
+   `.details`, `.hint`) and renders exactly like before. But not every
+   rejection looks like that — a plain object thrown from somewhere, a
+   fetch-layer failure, or an Edge Function error body can all lack
+   `.message`, and the old code fell back to plain `String(err)`, which for
+   any non-Error object prints the useless literal "[object Object]" (that's
+   what actually showed up on screen — a real bug in the error *display*,
+   not necessarily proof the underlying database error is still happening).
+   This tries every field actually seen in this codebase's error shapes
+   before falling back to JSON, so there's always something screenshot-able. */
+function describeAdminError(err){
+  if(err == null) return '';
+  if(typeof err === 'string') return err;
+  const parts = [];
+  if(err.message) parts.push(err.message);
+  else if(err.error_description) parts.push(err.error_description);
+  else if(err.error) parts.push(typeof err.error === 'string' ? err.error : JSON.stringify(err.error));
+  if(err.details) parts.push(String(err.details));
+  if(err.hint) parts.push('hint: ' + err.hint);
+  if(err.code) parts.push('code ' + err.code);
+  if(parts.length) return parts.join(' — ');
+  try{ const j = JSON.stringify(err); return j && j !== '{}' ? j : String(err); }
+  catch(e){ return String(err); }
+}
+
 function renderAdmin(){
   const errBox = $('adminErrorBox');
   errBox.classList.toggle('hidden', !adminLoadError);
@@ -1224,9 +1250,7 @@ function renderAdmin(){
     // isn't visible on a phone. This turns "something's wrong" into
     // something a screenshot can actually be diagnosed from.
     const detailEl = $('adminErrorDetail');
-    const detail = adminLoadError.message
-      ? adminLoadError.message + (adminLoadError.code ? ' (code ' + adminLoadError.code + ')' : '')
-      : String(adminLoadError);
+    const detail = describeAdminError(adminLoadError);
     detailEl.textContent = detail;
     detailEl.classList.toggle('hidden', !detail);
   }
@@ -1585,9 +1609,7 @@ function renderAdminNotifications(){
   errBox.classList.toggle('hidden', !adminNotifLoadError);
   if(adminNotifLoadError){
     const detailEl = $('notifErrorDetail');
-    const detail = adminNotifLoadError.message
-      ? adminNotifLoadError.message + (adminNotifLoadError.code ? ' (code ' + adminNotifLoadError.code + ')' : '')
-      : String(adminNotifLoadError);
+    const detail = describeAdminError(adminNotifLoadError);
     detailEl.textContent = detail;
     detailEl.classList.toggle('hidden', !detail);
   }
