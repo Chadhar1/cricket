@@ -7,6 +7,15 @@
 // after creating a notification with no scheduled_at. This is the ONLY
 // place in the whole system that holds the service role key and the FCM
 // service account — see _shared/fcm.ts and _shared/notify.ts for why.
+//
+// Tournament Organizer Control Center — Phase 8: a platform admin can send
+// ANY notification, unchanged. A tournament owner/manager can ALSO send —
+// but only one they themselves created (organizer_create_notification() in
+// supabase.sql already refuses to let them create anything but a
+// tournament-scoped audience_type targeting their own tournament/team), so
+// this function doesn't need to re-derive that scoping itself — it only
+// needs to confirm the caller both created it and still holds a
+// manager/owner role on the tournament it targets.
 // ============================================================================
 import { createClient } from 'npm:@supabase/supabase-js@2.45.4';
 import { corsHeaders } from '../_shared/cors.ts';
@@ -35,6 +44,12 @@ Deno.serve(async (req) => {
     const { data: userData, error: userError } = await callerClient.auth.getUser();
     if (userError || !userData?.user) throw new Error('Unauthorized: invalid session');
 
+    const body = await req.json().catch(() => ({}));
+    const notificationId = body?.notification_id;
+    if (!notificationId || typeof notificationId !== 'string') {
+      throw new Error('notification_id is required');
+    }
+
     // Admin status is re-verified here, independently of anything the
     // browser claims about itself — the `admins` table's existing RLS
     // policy already lets any authenticated user read it (that's how the
@@ -45,13 +60,45 @@ Deno.serve(async (req) => {
       .select('uid')
       .eq('uid', userData.user.id)
       .maybeSingle();
-    if (!adminRow) throw new Error('Forbidden: admin access required');
 
-    const body = await req.json().catch(() => ({}));
-    const notificationId = body?.notification_id;
-    if (!notificationId || typeof notificationId !== 'string') {
-      throw new Error('notification_id is required');
+    let authorized = !!adminRow;
+
+    if (!authorized) {
+      // Not a platform admin — see if this is a tournament owner/manager
+      // sending a notification they created themselves. The caller-scoped
+      // client can read this row at all only because of the Phase 8 RLS
+      // change letting a creator read their own notification.
+      const { data: notifRow } = await callerClient
+        .from('notifications')
+        .select('created_by, audience_type, audience_filter')
+        .eq('id', notificationId)
+        .maybeSingle();
+
+      if (notifRow && notifRow.created_by === userData.user.id) {
+        let tournamentId: string | null = null;
+        if (notifRow.audience_type === 'team_members') {
+          const teamId = notifRow.audience_filter?.team_id;
+          if (teamId) {
+            const { data: teamRow } = await callerClient
+              .from('tournament_teams')
+              .select('tournament_id')
+              .eq('id', teamId)
+              .maybeSingle();
+            tournamentId = teamRow?.tournament_id ?? null;
+          }
+        } else if (['tournament_participants', 'tournament_officials'].includes(notifRow.audience_type)) {
+          tournamentId = notifRow.audience_filter?.tournament_id ?? null;
+        }
+        if (tournamentId) {
+          const { data: isManager } = await callerClient.rpc('is_tournament_manager_or_owner', {
+            p_tournament_id: tournamentId,
+          });
+          authorized = !!isManager;
+        }
+      }
     }
+
+    if (!authorized) throw new Error('Forbidden: admin or tournament organizer access required');
 
     // Resolving the full audience, fanning out notification_recipients, and
     // reading device tokens across every matched user needs access no admin

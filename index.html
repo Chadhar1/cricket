@@ -621,7 +621,10 @@
   <div class="topbar" style="padding-top:0;">
     <div class="brand" style="min-width:0;">
       <div class="brand-title" style="white-space:normal;" id="tourName">Tournament</div>
-      <div style="margin-top:4px;" id="tourStatusBadge"></div>
+      <div style="margin-top:4px;display:flex;gap:6px;flex-wrap:wrap;align-items:center;">
+        <span id="tourStatusBadge"></span>
+        <span class="badge hidden" id="tourRoleBadge"></span>
+      </div>
     </div>
     <div class="topbar-actions">
       <button class="icon-btn" id="tourShareBtn">Share</button>
@@ -640,6 +643,7 @@
       <button class="pill" data-tab="fixtures">Fixtures</button>
       <button class="pill" data-tab="knockout">Knockout</button>
       <button class="pill" data-tab="teams">Teams</button>
+      <button class="pill" data-tab="stats">Stats</button>
       <button class="pill" data-tab="organizer">Organizer</button>
       <button class="pill" data-tab="rules">Rules</button>
     </div>
@@ -649,6 +653,7 @@
     <div id="tourTabFixtures" class="hidden"></div>
     <div id="tourTabKnockout" class="hidden"></div>
     <div id="tourTabTeams" class="hidden"></div>
+    <div id="tourTabStats" class="hidden"></div>
     <div id="tourTabOrganizer" class="hidden"></div>
     <div id="tourTabRules" class="hidden"></div>
   </div>
@@ -888,6 +893,27 @@
     <div class="op-count" id="opCount">0 / 10 Successful Tournaments</div>
     <div class="op-track"><div class="op-fill" id="opFill" style="width:0%;"></div></div>
     <div class="stat-dim" id="opNote" style="margin-top:8px;"></div>
+    <div class="stat-dim hidden" id="opVerifiedNote" style="margin-top:4px;"></div>
+  </div>
+
+  <!-- Shown only when this account holds a non-owner tournament role
+       (manager/scorer/official) granted by an organiser — owned tournaments
+       already show under My Tournaments, so this card stays hidden and
+       empty for the vast majority of users until someone actually assigns
+       them a role. Read-only for now: management tools land in a later
+       phase, this is just visibility that the grant exists. -->
+  <div class="card hidden" id="tourRolesCard">
+    <h2>Tournament Roles</h2>
+    <div class="stat-dim" style="margin-bottom:8px;">Tournaments where you've been given a role by an organiser</div>
+    <div id="tourRolesList"></div>
+  </div>
+
+  <!-- Tournament Organizer Control Center — Phase 5. Team invites awaiting
+       this account's own response — accept/decline right from here without
+       having to find the tournament first. -->
+  <div class="card hidden" id="teamInvitesCard">
+    <h2>Team Invites</h2>
+    <div id="teamInvitesList"></div>
   </div>
 
   <div class="card hidden" id="feedbackCard">

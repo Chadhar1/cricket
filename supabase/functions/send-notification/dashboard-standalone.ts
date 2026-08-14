@@ -1,6 +1,15 @@
 // ============================================================================
 // STANDALONE, DASHBOARD-DEPLOYABLE VERSION of send-notification.
 //
+// STALE as of the Tournament Organizer Control Center Phase 8 migration —
+// this file was never updated with the tournament-owner/manager
+// authorization path or the three new audience types (tournament_
+// participants/team_members/tournament_officials) added to index.ts and
+// _shared/notify.ts. It still works for admin-only sends. Regenerate it
+// from the current index.ts/_shared/*.ts before using it for anything
+// tournament-organizer-related — confirmed unused in this project (the CLI
+// deploy path is what's actually live), kept only as a documented fallback.
+//
 // The CLI project structure (send-notification/index.ts + a sibling
 // _shared/ folder used by both Edge Functions) doesn't work through the
 // Supabase dashboard's browser-based function editor, which only manages

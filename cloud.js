@@ -350,7 +350,20 @@ function tournamentColumns(t){
   };
 }
 export const saveTournament    = (t)=>saveRowIn('tournaments', t, tournamentColumns(t));
-export const fetchTournaments  = ()=>fetchAllIn('tournaments');
+
+/* Not fetchAllIn('tournaments') — same reasoning as fetchCloudMatches()
+   below for `cancelled`: `locked` (Phase 4) is a real column set only by
+   lock_tournament()/unlock_tournament(), never written into `data`, so a
+   plain `.select('data')` would silently make an owner's own device think
+   their tournament was never locked at all. */
+export async function fetchTournaments(){
+  if(!ready || !currentUser) return [];
+  const { data, error } = await sb.from('tournaments').select('data, locked, verified_at, verified_by')
+    .eq('user_id', currentUser.id).limit(200);
+  if(error){ console.error('fetch tournaments failed:', error); return []; }
+  return data.map(r=>({ ...r.data, locked: !!r.locked, verifiedAt: r.verified_at, verifiedBy: r.verified_by }));
+}
+
 export const deleteTournament  = (id)=>deleteRowIn('tournaments', id);
 
 /* Single tournament by id, for the public/shareable detail page — works
@@ -360,7 +373,7 @@ export const deleteTournament  = (id)=>deleteRowIn('tournaments', id);
 export async function fetchTournamentById(id){
   if(!ready || !id) return null;
   const { data, error } = await sb.from('tournaments')
-    .select('data, user_id, is_public, name, location, ground, start_date, end_date, description, banner_url, entry_rules, rules, status')
+    .select('data, user_id, is_public, name, location, ground, start_date, end_date, description, banner_url, entry_rules, rules, status, locked, verified_at, verified_by')
     .eq('id', id).maybeSingle();
   if(error){ console.error('fetchTournamentById failed:', error); return null; }
   if(!data) return null;
@@ -372,7 +385,8 @@ export async function fetchTournamentById(id){
     ground: data.ground || d.ground || '', startDate: data.start_date || d.startDate || null,
     endDate: data.end_date || d.endDate || null, description: data.description || d.description || '',
     bannerUrl: data.banner_url || d.bannerUrl || null, entryRules: data.entry_rules || d.entryRules || '',
-    rules: data.rules || d.rules || '', status: data.status || d.status || 'upcoming'
+    rules: data.rules || d.rules || '', status: data.status || d.status || 'upcoming',
+    locked: !!data.locked, verifiedAt: data.verified_at, verifiedBy: data.verified_by
   };
 }
 
@@ -411,6 +425,385 @@ export async function fetchTopPlayers(limit = 8){
     avatarId: r.avatar_id, photo: r.photo || undefined, points: r.points || 0,
     isOrganiser: r.is_organiser, region: r.region || '', primaryRole: r.primary_role || ''
   }));
+}
+
+/* ---------------------------------------------------------------------------
+   Tournament Organizer Control Center — Phase 2 (permission foundation).
+   See TOURNAMENT_ORGANIZER_CONTROL_CENTER_AUDIT.md for the full plan. These
+   are schema-layer building blocks only — no UI calls any of these yet.
+   `tournaments.user_id` is still the one true owner; a tournament_roles row
+   is an additional grant on top of it, never a replacement, so every
+   function here fails closed (returns null/[]/false) rather than throwing,
+   matching the rest of this non-admin section of the file.
+   --------------------------------------------------------------------------- */
+
+function toTournamentRole(row){
+  return {
+    id: row.id, tournamentId: row.tournament_id, uid: row.user_id, role: row.role,
+    grantedBy: row.granted_by, createdAt: row.created_at, updatedAt: row.updated_at
+  };
+}
+
+/* Every role granted on a tournament — only actually returns rows for the
+   tournament's own creator or an admin (see the RLS policy in supabase.sql);
+   anyone else gets an empty list rather than an error, same as querying a
+   private tournament's fixtures without access. */
+export async function fetchTournamentRoles(tournamentId){
+  if(!ready || !tournamentId) return [];
+  const { data, error } = await sb.from('tournament_roles').select('*').eq('tournament_id', tournamentId);
+  if(error){ console.error('fetchTournamentRoles failed:', error); return []; }
+  return data.map(toTournamentRole);
+}
+
+/* The signed-in user's own role on a tournament — 'owner' for the creator
+   (once backfilled/triggered), null if they hold no role there at all. This
+   is the read a future "can this person manage/score this tournament?" UI
+   check calls; it never needs elevated access since RLS already lets anyone
+   read their own row. */
+export async function fetchMyTournamentRole(tournamentId){
+  if(!ready || !currentUser || !tournamentId) return null;
+  const { data, error } = await sb.from('tournament_roles').select('role')
+    .eq('tournament_id', tournamentId).eq('user_id', currentUser.id).maybeSingle();
+  if(error){ console.error('fetchMyTournamentRole failed:', error); return null; }
+  return data ? data.role : null;
+}
+
+/* Grant (or change) a role. Server-side re-checks the caller is the
+   tournament's own creator or a platform admin (grant_tournament_role in
+   supabase.sql) — this call is not itself a security boundary, just the
+   client's way of invoking one. role is one of 'owner'|'manager'|'scorer'|
+   'official'. */
+export async function grantTournamentRole(tournamentId, uid, role){
+  if(!ready || !currentUser || !tournamentId || !uid || !role) return false;
+  const { error } = await sb.rpc('grant_tournament_role', {
+    p_tournament_id: tournamentId, p_user_id: uid, p_role: role
+  });
+  if(error){ console.error('grantTournamentRole failed:', error); return false; }
+  return true;
+}
+
+/* Revoke a previously-granted role. Cannot remove the tournament's own
+   creator this way — see revoke_tournament_role's own comment in
+   supabase.sql for why. */
+export async function revokeTournamentRole(tournamentId, uid){
+  if(!ready || !currentUser || !tournamentId || !uid) return false;
+  const { error } = await sb.rpc('revoke_tournament_role', {
+    p_tournament_id: tournamentId, p_user_id: uid
+  });
+  if(error){ console.error('revokeTournamentRole failed:', error); return false; }
+  return true;
+}
+
+/* Every tournament the signed-in user holds ANY role on (including their
+   own, via the owner-role backfill/trigger — the caller filters those out
+   client-side since "My Tournaments" already covers them). Two queries
+   instead of a Supabase embedded-join: tournament_roles' own RLS only lets
+   this read the caller's own rows anyway, so there's nothing a join buys
+   here that a plain `.in('id', ids)` follow-up doesn't already give, and it
+   keeps this readable without relying on a specific FK-embedding syntax. */
+export async function fetchMyTournamentRoles(){
+  if(!ready || !currentUser) return [];
+  const { data: roleRows, error: roleErr } = await sb.from('tournament_roles')
+    .select('tournament_id, role').eq('user_id', currentUser.id);
+  if(roleErr){ console.error('fetchMyTournamentRoles failed:', roleErr); return []; }
+  if(!roleRows.length) return [];
+
+  const ids = roleRows.map(r=>r.tournament_id);
+  const { data: tours, error: tourErr } = await sb.from('tournaments')
+    .select('id, name, location, ground, start_date, end_date, status, is_public, user_id')
+    .in('id', ids);
+  if(tourErr){ console.error('fetchMyTournamentRoles (tournaments) failed:', tourErr); return []; }
+  const byId = Object.fromEntries(tours.map(t=>[t.id, t]));
+
+  return roleRows.map(r=>{
+    const t = byId[r.tournament_id];
+    return {
+      tournamentId: r.tournament_id, role: r.role,
+      // Null when the tournament itself was deleted after the role row was
+      // granted (or, in principle, not visible under this RLS policy) —
+      // the caller filters these out rather than showing a broken row.
+      tournament: t ? {
+        id: t.id, name: t.name || '', location: t.location || '', ground: t.ground || '',
+        startDate: t.start_date || null, endDate: t.end_date || null,
+        status: t.status || 'upcoming', isPublic: !!t.is_public, ownerId: t.user_id
+      } : null
+    };
+  });
+}
+
+
+/* ---------------------------------------------------------------------------
+   Tournament Organizer Control Center — Phase 4: manager write access +
+   emergency controls. Thin RPC wrappers, same fail-closed (false, not a
+   throw) contract as the Phase 2 functions above — server-side authorization
+   in supabase.sql (lock_tournament / unlock_tournament / set_tournament_status
+   / organizer_cancel_tournament) is the real boundary, this is just the
+   client's way of calling it.
+   --------------------------------------------------------------------------- */
+
+export async function lockTournament(tournamentId){
+  if(!ready || !currentUser || !tournamentId) return false;
+  const { error } = await sb.rpc('lock_tournament', { p_tournament_id: tournamentId });
+  if(error){ console.error('lockTournament failed:', error); return false; }
+  return true;
+}
+
+export async function unlockTournament(tournamentId){
+  if(!ready || !currentUser || !tournamentId) return false;
+  const { error } = await sb.rpc('unlock_tournament', { p_tournament_id: tournamentId });
+  if(error){ console.error('unlockTournament failed:', error); return false; }
+  return true;
+}
+
+/* status is one of 'upcoming'|'live'|'paused' — 'completed' stays derived
+   and 'cancelled' goes through organizerCancelTournament() below, both by
+   design (see set_tournament_status's comment in supabase.sql). */
+export async function setTournamentStatus(tournamentId, status){
+  if(!ready || !currentUser || !tournamentId || !status) return false;
+  const { error } = await sb.rpc('set_tournament_status', { p_tournament_id: tournamentId, p_status: status });
+  if(error){ console.error('setTournamentStatus failed:', error); return false; }
+  return true;
+}
+
+export async function organizerCancelTournament(tournamentId){
+  if(!ready || !currentUser || !tournamentId) return false;
+  const { error } = await sb.rpc('organizer_cancel_tournament', { p_tournament_id: tournamentId });
+  if(error){ console.error('organizerCancelTournament failed:', error); return false; }
+  return true;
+}
+
+/* saveTournament() above is an upsert that always stamps `user_id:
+   currentUser.id` — correct for an actual owner (that's how a brand-new
+   tournament gets created), but wrong for a manager editing someone else's
+   tournament: it would try to rewrite the row's ownership to the manager's
+   own account, which the Phase 4 manager RLS policy's WITH CHECK correctly
+   rejects (it requires user_id stay unchanged). This is a plain UPDATE,
+   never an insert, and never touches user_id at all — exactly what that
+   policy allows. Use this instead of saveTournament() whenever the caller
+   isn't the tournament's own row-owner (app.js decides which, since it
+   already knows whether a tournament came from the local owned list or a
+   fetched/viewed one). */
+export async function updateTournamentAsManager(t){
+  if(!ready || !currentUser || !t || !t.id) return false;
+  const { error } = await sb.from('tournaments').update({
+    data: clean(t), updated_at: new Date().toISOString(), ...tournamentColumns(t)
+  }).eq('id', t.id);
+  if(error){ console.error('updateTournamentAsManager failed:', error); return false; }
+  return true;
+}
+
+/* ---------------------------------------------------------------------------
+   Tournament Organizer Control Center — Phase 5: real, account-linked team
+   rosters (tournament_teams / tournament_team_players — see supabase.sql).
+   Deliberately parallel to, not a replacement for, the existing free-text
+   `teams.data.players` roster — see that migration's comment for why.
+   --------------------------------------------------------------------------- */
+
+function toTournamentTeam(row){
+  return {
+    id: row.id, tournamentId: row.tournament_id, name: row.name,
+    localTeamId: row.local_team_id, createdBy: row.created_by, createdAt: row.created_at
+  };
+}
+
+function toTeamPlayer(row){
+  return {
+    id: row.id, teamId: row.team_id, uid: row.user_id, status: row.status,
+    isCaptain: !!row.is_captain, invitedBy: row.invited_by, createdAt: row.created_at
+  };
+}
+
+export async function fetchTournamentTeams(tournamentId){
+  if(!ready || !tournamentId) return [];
+  const { data, error } = await sb.from('tournament_teams').select('*').eq('tournament_id', tournamentId);
+  if(error){ console.error('fetchTournamentTeams failed:', error); return []; }
+  return data.map(toTournamentTeam);
+}
+
+export async function fetchTeamRoster(teamId){
+  if(!ready || !teamId) return [];
+  const { data, error } = await sb.from('tournament_team_players').select('*').eq('team_id', teamId);
+  if(error){ console.error('fetchTeamRoster failed:', error); return []; }
+  return data.map(toTeamPlayer);
+}
+
+/* Every invite (any status) waiting on the signed-in user's own response,
+   across every tournament — this is what powers the Profile screen's "Team
+   Invites" card. Two follow-up queries rather than an embedded join, same
+   reasoning as fetchMyTournamentRoles() above. */
+export async function fetchMyTeamInvites(){
+  if(!ready || !currentUser) return [];
+  const { data: rows, error } = await sb.from('tournament_team_players')
+    .select('*').eq('user_id', currentUser.id).eq('status', 'invited');
+  if(error){ console.error('fetchMyTeamInvites failed:', error); return []; }
+  if(!rows.length) return [];
+
+  const teamIds = rows.map(r=>r.team_id);
+  const { data: teams, error: teamErr } = await sb.from('tournament_teams')
+    .select('id, tournament_id, name').in('id', teamIds);
+  if(teamErr){ console.error('fetchMyTeamInvites (teams) failed:', teamErr); return []; }
+  const teamById = Object.fromEntries(teams.map(t=>[t.id, t]));
+
+  const tourIds = [...new Set(teams.map(t=>t.tournament_id))];
+  const { data: tours, error: tourErr } = await sb.from('tournaments').select('id, name').in('id', tourIds);
+  if(tourErr){ console.error('fetchMyTeamInvites (tournaments) failed:', tourErr); return []; }
+  const tourById = Object.fromEntries(tours.map(t=>[t.id, t]));
+
+  return rows.map(r=>{
+    const team = teamById[r.team_id];
+    const tour = team ? tourById[team.tournament_id] : null;
+    return {
+      ...toTeamPlayer(r),
+      teamName: team ? team.name : 'Team',
+      tournamentId: team ? team.tournament_id : null,
+      tournamentName: tour ? tour.name : 'Tournament'
+    };
+  });
+}
+
+export async function createTournamentTeam(tournamentId, name, localTeamId){
+  if(!ready || !currentUser || !tournamentId || !name) return null;
+  const { data, error } = await sb.rpc('create_tournament_team', {
+    p_tournament_id: tournamentId, p_name: name, p_local_team_id: localTeamId || null
+  });
+  if(error){ console.error('createTournamentTeam failed:', error); return null; }
+  return toTournamentTeam(data);
+}
+
+export async function invitePlayerToTeam(teamId, uid){
+  if(!ready || !currentUser || !teamId || !uid) return false;
+  const { error } = await sb.rpc('invite_player_to_team', { p_team_id: teamId, p_user_id: uid });
+  if(error){ console.error('invitePlayerToTeam failed:', error); return false; }
+  return true;
+}
+
+export async function respondToTeamInvite(teamId, accept){
+  if(!ready || !currentUser || !teamId) return false;
+  const { error } = await sb.rpc('respond_to_team_invite', { p_team_id: teamId, p_accept: !!accept });
+  if(error){ console.error('respondToTeamInvite failed:', error); return false; }
+  return true;
+}
+
+export async function setTeamCaptain(teamId, uid){
+  if(!ready || !currentUser || !teamId || !uid) return false;
+  const { error } = await sb.rpc('set_team_captain', { p_team_id: teamId, p_user_id: uid });
+  if(error){ console.error('setTeamCaptain failed:', error); return false; }
+  return true;
+}
+
+export async function removeTeamPlayer(teamId, uid){
+  if(!ready || !currentUser || !teamId || !uid) return false;
+  const { error } = await sb.rpc('remove_team_player', { p_team_id: teamId, p_user_id: uid });
+  if(error){ console.error('removeTeamPlayer failed:', error); return false; }
+  return true;
+}
+
+/* ---------------------------------------------------------------------------
+   Tournament Organizer Control Center — Phase 7: scorer/official assignment.
+   fixtures is the Phase 6 shadow table (read-only mirror of a tournament's
+   JSONB fixtures/knockout — see that migration's comment); these functions
+   are the one thing that's genuinely only stored there, since assignment
+   was never part of tournament.js's fixture shape to begin with.
+   --------------------------------------------------------------------------- */
+
+function toFixtureRow(row){
+  return {
+    id: row.id, tournamentId: row.tournament_id, stage: row.stage, round: row.round,
+    teamAId: row.team_a_id, teamBId: row.team_b_id, date: row.fixture_date, venue: row.venue,
+    matchId: row.match_id, status: row.status, result: row.result, dependsOn: row.depends_on,
+    assignedScorerUid: row.assigned_scorer_uid, assignedOfficialUid: row.assigned_official_uid
+  };
+}
+
+export async function fetchTournamentFixtureRows(tournamentId){
+  if(!ready || !tournamentId) return [];
+  const { data, error } = await sb.from('fixtures').select('*').eq('tournament_id', tournamentId);
+  if(error){ console.error('fetchTournamentFixtureRows failed:', error); return []; }
+  return data.map(toFixtureRow);
+}
+
+/* role is 'scorer'|'official'. Server-side also requires uid to actually
+   hold that tournament_roles role already (see assign_fixture_role's
+   comment in supabase.sql) — grant the role first (grantTournamentRole)
+   before assigning them to a fixture. */
+export async function assignFixtureRole(fixtureId, uid, role){
+  if(!ready || !currentUser || !fixtureId || !uid || !role) return false;
+  const { error } = await sb.rpc('assign_fixture_role', { p_fixture_id: fixtureId, p_user_id: uid, p_role: role });
+  if(error){ console.error('assignFixtureRole failed:', error); return false; }
+  return true;
+}
+
+export async function unassignFixtureRole(fixtureId, role){
+  if(!ready || !currentUser || !fixtureId || !role) return false;
+  const { error } = await sb.rpc('unassign_fixture_role', { p_fixture_id: fixtureId, p_role: role });
+  if(error){ console.error('unassignFixtureRole failed:', error); return false; }
+  return true;
+}
+
+/* ---------------------------------------------------------------------------
+   Tournament Organizer Control Center — Phase 9: statistics + disputes.
+
+   fetchTournamentMatches() reads the raw `matches` rows (full ball-by-ball
+   data, not just the small result summary already folded into a
+   tournament's own JSONB) — only possible for a signed-in owner/manager
+   thanks to the additive "tournament owner or manager can read tournament
+   matches" RLS policy added alongside this. Anyone else gets an RLS-filtered
+   empty result, not an error, same as every other RLS-scoped read in this
+   file — the app.js caller only ever invokes this from a manage-gated UI
+   anyway, this is defense in depth, not the only gate.
+   --------------------------------------------------------------------------- */
+export async function fetchTournamentMatches(tournamentId){
+  if(!ready || !tournamentId) return [];
+  const { data, error } = await sb.from('matches').select('data').eq('data->>tournamentId', tournamentId);
+  if(error){ console.error('fetchTournamentMatches failed:', error); return []; }
+  return data.map(r=>r.data);
+}
+
+function toDispute(row){
+  return {
+    id: row.id, tournamentId: row.tournament_id, fixtureId: row.fixture_id,
+    raisedBy: row.raised_by, category: row.category, description: row.description,
+    status: row.status, resolutionNote: row.resolution_note,
+    resolvedBy: row.resolved_by, resolvedAt: row.resolved_at, createdAt: row.created_at
+  };
+}
+
+/* Any signed-in viewer can raise one against a tournament they can see —
+   raise_dispute() itself is the only gate (RPC-only writes, same pattern as
+   every other Phase 2+ table in this file), so there's no separate
+   "can this user file a dispute" check on the client beyond being signed in. */
+export async function raiseDispute(tournamentId, description, category, fixtureId){
+  requireCloud();
+  if(!currentUser) throw Object.assign(new Error('Not signed in'), { code:'app/not-signed-in' });
+  const { data, error } = await sb.rpc('raise_dispute', {
+    p_tournament_id: tournamentId, p_fixture_id: fixtureId || null,
+    p_category: category || 'other', p_description: description
+  });
+  if(error) throw error;
+  return toDispute(data);
+}
+
+/* Owner/manager/admin only — resolve_dispute() re-checks this server-side
+   regardless of what the client believes canManageTour() says. */
+export async function resolveDispute(disputeId, status, resolutionNote){
+  if(!ready || !currentUser || !disputeId || !status) return null;
+  const { data, error } = await sb.rpc('resolve_dispute', {
+    p_dispute_id: disputeId, p_status: status, p_resolution_note: resolutionNote || null
+  });
+  if(error){ console.error('resolveDispute failed:', error); return null; }
+  return toDispute(data);
+}
+
+/* Read-only, straight RLS — the "raiser or organizer or admin can read a
+   dispute" policy already scopes this correctly, so a player sees only
+   their own disputes here while a manager/owner/admin sees every dispute
+   for a tournament they run. */
+export async function fetchTournamentDisputes(tournamentId){
+  if(!ready || !tournamentId) return [];
+  const { data, error } = await sb.from('tournament_disputes').select('*')
+    .eq('tournament_id', tournamentId).order('created_at', { ascending:false });
+  if(error){ console.error('fetchTournamentDisputes failed:', error); return []; }
+  return data.map(toDispute);
 }
 
 /* scheduled events */
@@ -605,9 +998,14 @@ export async function adminSetOrganiserStatus(uid, isOrganiser){
 export async function fetchAllTournamentsAdmin(max = 300){
   if(!ready) return [];
   const { data, error } = await sb.from('tournaments')
-    .select('id, user_id, data, updated_at').order('updated_at', { ascending: false }).limit(max);
+    .select('id, user_id, data, updated_at, locked, verified_at, verified_by')
+    .order('updated_at', { ascending: false }).limit(max);
   if(error){ console.error('fetchAllTournamentsAdmin failed:', error); throw error; }
-  return data.map(r=>({ id: r.id, ownerId: r.user_id, tournament: r.data, updatedAt: r.updated_at }));
+  return data.map(r=>({
+    id: r.id, ownerId: r.user_id, updatedAt: r.updated_at,
+    locked: !!r.locked, verifiedAt: r.verified_at, verifiedBy: r.verified_by,
+    tournament: { ...r.data, locked: !!r.locked, verifiedAt: r.verified_at }
+  }));
 }
 
 export async function fetchAllMatchesAdmin(max = 500){
@@ -650,6 +1048,36 @@ export async function adminCancelMatch(matchId){
   const { data, error } = await sb.rpc('admin_cancel_match', { p_id: matchId });
   if(error){ console.error('adminCancelMatch failed:', error); return false; }
   return !!data;
+}
+
+/* ---------------------------------------------------------------------------
+   Tournament Organizer Control Center — Phase 10: completion + verification.
+   Both throw (rather than swallow) on failure, deliberately unlike most
+   admin actions above — is_tournament_complete() rejecting a verify attempt
+   is a real, actionable message ("every league fixture needs a result
+   first") the admin UI should actually show, not just a generic toast. */
+export async function adminVerifyTournament(tournamentId){
+  requireCloud();
+  const { data, error } = await sb.rpc('admin_verify_tournament', { p_tournament_id: tournamentId });
+  if(error) throw error;
+  return data;
+}
+
+export async function adminUnverifyTournament(tournamentId){
+  requireCloud();
+  const { data, error } = await sb.rpc('admin_unverify_tournament', { p_tournament_id: tournamentId });
+  if(error) throw error;
+  return data;
+}
+
+/* Read-only, unrestricted — see organiser_verified_tournament_count()'s
+   comment in supabase.sql for why. Used by the Profile screen's "Organizer
+   Progress" card alongside the existing client-derived completedCount. */
+export async function fetchOrganiserVerifiedCount(uid){
+  if(!ready || !uid) return 0;
+  const { data, error } = await sb.rpc('organiser_verified_tournament_count', { p_uid: uid });
+  if(error){ console.error('fetchOrganiserVerifiedCount failed:', error); return 0; }
+  return data || 0;
 }
 
 /* ---------------- feedback ---------------- */
@@ -851,6 +1279,36 @@ export async function createNotification({
     status: scheduledAt ? 'scheduled' : 'draft',
     scheduled_at: scheduledAt || null
   }).select().maybeSingle();
+  if(error) throw error;
+  return toAppNotification(data);
+}
+
+/* Tournament Organizer Control Center — Phase 8: the organizer-facing twin
+   of createNotification() above. Goes through organizer_create_notification()
+   (SECURITY DEFINER) instead of a plain insert because a manager/owner is
+   NOT allowed to write notifications rows directly — only the three
+   tournament-scoped audience types, only targeting their own tournament/
+   team, and only tournaments they actually manage. The RPC itself re-checks
+   all of that server-side; this wrapper just shapes the call and reuses the
+   same toAppNotification()/previewAudienceCount()/sendNotificationNow() the
+   admin path already uses, since sending and previewing work identically
+   once a notification row exists. */
+export async function organizerCreateNotification({
+  tournamentId, type, title, message, audienceType, audienceFilter,
+  actionType, actionTarget
+}){
+  requireCloud();
+  if(!currentUser) throw Object.assign(new Error('Not signed in'), { code:'app/not-signed-in' });
+  const { data, error } = await sb.rpc('organizer_create_notification', {
+    p_tournament_id: tournamentId,
+    p_type: type || 'tournament',
+    p_title: (title || '').trim(),
+    p_message: (message || '').trim(),
+    p_audience_type: audienceType,
+    p_audience_filter: audienceFilter || {},
+    p_action_type: actionType || 'open_tournament',
+    p_action_target: actionTarget || null
+  });
   if(error) throw error;
   return toAppNotification(data);
 }

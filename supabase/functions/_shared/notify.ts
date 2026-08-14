@@ -21,6 +21,41 @@ export async function resolveAudience(
   audienceType: string,
   filter: Record<string, unknown>
 ): Promise<string[]> {
+  // Tournament Organizer Control Center — Phase 8: these three read from
+  // tournament_team_players / tournament_roles instead of profiles, so they
+  //'re handled as early returns rather than folded into the profiles query
+  // builder below. Mirrors resolve_notification_audience()'s three new
+  // branches in supabase.sql — keep both in sync.
+  if (audienceType === 'tournament_participants') {
+    const tournamentId = filter.tournament_id ? String(filter.tournament_id) : '';
+    if (!tournamentId) return [];
+    const { data: teams, error: teamsErr } = await supabase
+      .from('tournament_teams').select('id').eq('tournament_id', tournamentId);
+    if (teamsErr) throw teamsErr;
+    const teamIds = (teams as { id: string }[]).map((t) => t.id);
+    if (!teamIds.length) return [];
+    const { data, error } = await supabase
+      .from('tournament_team_players').select('user_id').in('team_id', teamIds).eq('status', 'accepted');
+    if (error) throw error;
+    return [...new Set((data as { user_id: string }[]).map((r) => r.user_id))];
+  }
+  if (audienceType === 'tournament_officials') {
+    const tournamentId = filter.tournament_id ? String(filter.tournament_id) : '';
+    if (!tournamentId) return [];
+    const { data, error } = await supabase
+      .from('tournament_roles').select('user_id').eq('tournament_id', tournamentId);
+    if (error) throw error;
+    return [...new Set((data as { user_id: string }[]).map((r) => r.user_id))];
+  }
+  if (audienceType === 'team_members') {
+    const teamId = filter.team_id ? String(filter.team_id) : '';
+    if (!teamId) return [];
+    const { data, error } = await supabase
+      .from('tournament_team_players').select('user_id').eq('team_id', teamId).eq('status', 'accepted');
+    if (error) throw error;
+    return (data as { user_id: string }[]).map((r) => r.user_id);
+  }
+
   let query = supabase.from('profiles').select('id');
 
   switch (audienceType) {

@@ -1,6 +1,14 @@
 // ============================================================================
 // STANDALONE, DASHBOARD-DEPLOYABLE VERSION of dispatch-scheduled.
 //
+// STALE as of the Tournament Organizer Control Center Phase 8 migration —
+// this file's inlined resolveAudience() does not have the three new
+// tournament-scoped audience types (tournament_participants/team_members/
+// tournament_officials) added to _shared/notify.ts. Regenerate it from the
+// current _shared/notify.ts before ever deploying it — confirmed unused in
+// this project (the CLI deploy path is what's actually live), kept only as
+// a documented fallback.
+//
 // See send-notification/dashboard-standalone.ts for the full explanation of
 // why this exists (the dashboard's browser editor can't reach a shared
 // _shared/ folder outside one function). This file inlines the same FCM +

@@ -33,14 +33,18 @@ export const POINTS = { win:2, tie:1, noResult:1, loss:0 };
    change needed for that either.
    =========================================================================== */
 
-export const STATUSES = ['upcoming','live','completed','cancelled'];
+export const STATUSES = ['upcoming','live','paused','completed','cancelled'];
 
 /* Default status when an organizer hasn't manually set one — derived from
    real dates/completion, never guessed. Manual overrides (e.g. an
-   organizer marking a tournament "Cancelled") always win; this is only the
-   fallback. */
+   organizer marking a tournament "Cancelled", or an emergency "Paused")
+   always win; this is only the fallback. Checked in this order on purpose:
+   cancelled and paused are both organizer/admin decisions that should stick
+   regardless of what the fixtures/dates would otherwise imply, and
+   cancelled outranks paused since there's no coming back from cancelled. */
 export function deriveStatus(tournament, storedStatus){
   if(storedStatus === 'cancelled') return 'cancelled';
+  if(storedStatus === 'paused') return 'paused';
   if(tournamentChampion(tournament)) return 'completed';
   const started = allFixtures(tournament).some(f=>f.status === 'completed');
   if(started) return 'live';

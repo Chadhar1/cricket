@@ -52,14 +52,24 @@ import {
   submitFeedback, fetchAllFeedback, updateFeedbackStatus,
   fetchAllTournamentsAdmin, fetchAllMatchesAdmin, fetchAllProfilesAdmin,
   adminCancelTournament, adminCancelMatch, adminSetOrganiserStatus,
+  adminVerifyTournament, adminUnverifyTournament, fetchOrganiserVerifiedCount,
   fetchTopPlayers,
   createNotification, previewAudienceCount, sendNotificationNow, cancelScheduledNotification,
+  organizerCreateNotification,
   fetchNotificationHistory, fetchNotificationStats,
   fetchNotificationTemplates, saveNotificationTemplate, deleteNotificationTemplate,
   fetchMyNotifications, fetchUnreadNotificationCount, markNotificationRead,
   markAllNotificationsRead, dismissNotification, watchMyNotifications,
   registerDeviceToken, removeDeviceToken,
-  notifyOrganiserApplicationApproved, notifyMatchStarted, notifyMatchCompleted
+  notifyOrganiserApplicationApproved, notifyMatchStarted, notifyMatchCompleted,
+  fetchMyTournamentRoles, fetchMyTournamentRole,
+  lockTournament, unlockTournament, setTournamentStatus, organizerCancelTournament,
+  updateTournamentAsManager,
+  fetchTournamentTeams, fetchTeamRoster, fetchMyTeamInvites, createTournamentTeam,
+  invitePlayerToTeam, respondToTeamInvite, setTeamCaptain, removeTeamPlayer,
+  fetchTournamentFixtureRows,
+  assignFixtureRole as assignFixtureRoleCloud, unassignFixtureRole as unassignFixtureRoleCloud,
+  fetchTournamentMatches, raiseDispute, resolveDispute, fetchTournamentDisputes
 } from './cloud.js';
 
 import { firebaseMessagingConfig, vapidKey, isPushConfigured } from './firebase-messaging-config.js';
@@ -102,6 +112,36 @@ let openTourId = null, tourTab = 'overview';
 let viewedTournamentPublic = null;   // non-owned tournament fetched for read-only viewing
 let tourLoading = false;
 let tourLoadError = '';
+/* Tournament Organizer Control Center — Phase 3. tourRoleCache maps
+   tournamentId -> the signed-in user's own role there ('owner'|'manager'|
+   'scorer'|'official'), populated on demand as tournaments are opened —
+   never fetched for one the local `tournaments` array already proves
+   ownership of, since that's already known for free. myTourRoles is the
+   flat list backing the Profile screen's "Tournament Roles" card. */
+let tourRoleCache = {};
+let myTourRoles = [];
+/* Tournament Organizer Control Center — Phase 5/7.
+   fixtureAssignCache: tournamentId -> { fixtureId: {assignedScorerUid, assignedOfficialUid} }
+   tourTeamsCache:     tournamentId -> [tournament_teams rows] (which JSONB
+                       teams have an account-linked roster enabled)
+   myTeamInvites:      pending team invites for the signed-in user (Profile screen card)
+   rosterModal*:       state for the roster-management modal (opened per team) */
+let fixtureAssignCache = {};
+let tourTeamsCache = {};
+let myTeamInvites = [];
+let rosterModalTeamId = null;
+let rosterModalRoster = [];
+let rosterModalSearchResults = [];
+let assignFixtureModalId = null;
+let assignFixtureSearchResults = [];
+/* Tournament Organizer Control Center — Phase 9.
+   tourMatchesCache:   tournamentId -> [raw match objects] (owner/manager only —
+                       fetchTournamentMatches() comes back empty for anyone
+                       else, RLS-enforced, not just hidden client-side)
+   tourDisputesCache:  tournamentId -> [dispute rows] (raiser sees only their
+                       own via RLS; manager/owner/admin see all for their tournament) */
+let tourMatchesCache = {};
+let tourDisputesCache = {};
 let setupPrefill = null;
 let mcTab = 'scorecard';
 let statsTab = 'batting';
@@ -767,6 +807,20 @@ function renderProfile(){
       $('opNote').textContent = completedCount >= OP_TARGET
         ? "You've reached 10 completed tournaments — Lucky Draw entry will open here once it launches."
         : `${OP_TARGET - completedCount} more completed tournament${OP_TARGET - completedCount === 1 ? '' : 's'} to reach the Lucky Draw milestone.`;
+
+      // Tournament Organizer Control Center — Phase 10: the real,
+      // admin-verified count alongside the client-derived one above. Fetched
+      // separately since it's a network round trip — never blocks the rest
+      // of this render, and is what any future reward logic should actually
+      // key off, not completedCount (which a tampered local device could
+      // claim without ever having a real result to back it up).
+      if(cloudReady() && getUser()){
+        fetchOrganiserVerifiedCount(getUser().id).then(n=>{
+          const el = $('opVerifiedNote'); if(!el) return;
+          el.textContent = `${n} admin-verified tournament${n === 1 ? '' : 's'}`;
+          el.classList.toggle('hidden', n === 0);
+        });
+      }
     }
   }
 
@@ -793,6 +847,55 @@ function renderProfile(){
     btn.onclick = ()=>go('auth');
   }
   $('versionNote').textContent = 'Version ' + APP_VERSION;
+  renderTourRolesCard();
+  renderTeamInvitesCard();
+}
+
+/* Tournament Organizer Control Center — Phase 3. Only ever shows tournaments
+   where this account holds a role it did NOT already get by being the
+   tournaments row's own owner — those already appear under My Tournaments,
+   so surfacing them again here would just be noise. Async + re-render, same
+   pattern as renderTourOrganizer(): fetch after paint rather than blocking
+   the rest of the Profile screen on a network round trip. */
+async function renderTourRolesCard(){
+  const card = $('tourRolesCard');
+  if(!cloudReady() || !getUser()){ card.classList.add('hidden'); return; }
+  myTourRoles = await fetchMyTournamentRoles();
+  if(screen !== 'profile') return; // navigated away while this was loading
+  const ROLE_LABEL = { owner:'Owner', manager:'Manager', scorer:'Scorer', official:'Official' };
+  const rows = myTourRoles.filter(r=>r.tournament && r.role !== 'owner');
+  card.classList.toggle('hidden', rows.length === 0);
+  if(!rows.length) return;
+  $('tourRolesList').innerHTML = rows.map(r=>`
+    <div class="list-pick" data-action="open-tour" data-id="${esc(r.tournament.id)}">
+      <div class="lp-n">${esc(r.tournament.name || 'Tournament')}</div>
+      <span class="badge open">${esc(ROLE_LABEL[r.role] || r.role)}</span>
+    </div>`).join('');
+}
+
+/* Tournament Organizer Control Center — Phase 5. Mirrors renderTourRolesCard
+   above — same async-fetch-then-toggle-hidden pattern, staying hidden and
+   empty for anyone who's never been invited onto a tournament roster. */
+async function renderTeamInvitesCard(){
+  const card = $('teamInvitesCard');
+  if(!cloudReady() || !getUser()){ card.classList.add('hidden'); return; }
+  myTeamInvites = await fetchMyTeamInvites();
+  if(screen !== 'profile') return; // navigated away while this was loading
+  card.classList.toggle('hidden', myTeamInvites.length === 0);
+  if(!myTeamInvites.length) return;
+  $('teamInvitesList').innerHTML = myTeamInvites.map(inv=>`
+    <div class="list-pick" style="flex-wrap:wrap;">
+      <div class="lp-n">${esc(inv.teamName)} <span class="stat-dim">&middot; ${esc(inv.tournamentName)}</span></div>
+      <button class="icon-btn" data-action="accept-team-invite" data-team-id="${esc(inv.teamId)}">Accept</button>
+      <button class="icon-btn" data-action="decline-team-invite" data-team-id="${esc(inv.teamId)}">Decline</button>
+    </div>`).join('');
+}
+
+async function respondTeamInviteAction(teamId, accept){
+  const ok = await respondToTeamInvite(teamId, accept);
+  if(!ok){ toast('Could not respond — try again'); return; }
+  toast(accept ? 'Invite accepted' : 'Invite declined');
+  renderTeamInvitesCard();
 }
 async function saveProfileForm(){
   profile.displayName = $('profileNameInput').value.trim() || displayName();
@@ -1207,21 +1310,51 @@ function renderAdminTournaments(){
   $('adminToursList').innerHTML = rows.length ? rows.map(r=>{
     const t = r.tournament || {};
     const cancelled = t.status === 'cancelled';
+    const verified = !!r.verifiedAt;
     return `<div class="card" style="margin-bottom:8px;">
       <div style="display:flex;justify-content:space-between;gap:8px;align-items:flex-start;">
         <div class="lp-n">
-          <div class="batter-name">${esc(t.name || 'Untitled tournament')}</div>
+          <div class="batter-name">${esc(t.name || 'Untitled tournament')}${verified ? ' &#9989;' : ''}</div>
           <div class="stat-dim">Organiser: ${esc(tournamentOwnerLabel(r.ownerId))}</div>
           <div class="stat-dim">${(t.teams||[]).length} teams${t.location ? ' &middot; ' + esc(t.location) : ''}</div>
         </div>
         ${statusBadgeHTML(t.status || 'upcoming')}
       </div>
-      <div style="display:flex;gap:6px;margin-top:10px;">
+      <div style="display:flex;gap:6px;margin-top:10px;flex-wrap:wrap;">
         <button class="icon-btn" data-action="admin-view-tournament" data-id="${esc(r.id)}">View</button>
         ${!cancelled ? `<button class="icon-btn" data-action="admin-cancel-tournament" data-id="${esc(r.id)}" data-name="${esc(t.name||'this tournament')}">Cancel</button>` : ''}
+        ${verified
+          ? `<button class="icon-btn" data-action="admin-unverify-tournament" data-id="${esc(r.id)}">Unverify</button>`
+          : `<button class="icon-btn" data-action="admin-verify-tournament" data-id="${esc(r.id)}">Verify</button>`}
       </div>
     </div>`;
   }).join('') : '<div class="empty-note">No tournaments match your filters.</div>';
+}
+
+/* Tournament Organizer Control Center — Phase 10. Real completion is
+   re-checked server-side by admin_verify_tournament() regardless of what
+   the admin believes — this just surfaces its rejection message (e.g. "the
+   final needs a result first") instead of a generic failure toast. */
+async function adminVerifyTournamentAction(id){
+  try{
+    await adminVerifyTournament(id);
+    toast('Tournament verified');
+    await refreshAdminData(); renderAdminTournaments();
+  }catch(err){
+    console.error('adminVerifyTournamentAction failed:', err);
+    toast(err?.message || 'Could not verify — try again');
+  }
+}
+
+async function adminUnverifyTournamentAction(id){
+  try{
+    await adminUnverifyTournament(id);
+    toast('Verification removed');
+    await refreshAdminData(); renderAdminTournaments();
+  }catch(err){
+    console.error('adminUnverifyTournamentAction failed:', err);
+    toast('Could not update — try again');
+  }
 }
 
 let adminMatchManageOpen = new Set();  // ids currently showing the Manage panel
@@ -3038,7 +3171,14 @@ async function handleInningsEnd(){
 
 async function linkResultToTournament(m){
   if(!m.tournamentId || !m.fixtureId) return;
-  const t = tournaments.find(x=>x.id === m.tournamentId);
+  // Tournament Organizer Control Center — Phase 4: a manager's own "Play"
+  // scores a match tied to a tournament that was never in the local owned
+  // `tournaments` array (see canManageTour()) — it only ever exists as
+  // `viewedTournamentPublic`. Without this fallback, a manager's completed
+  // fixture would score fine but the result would silently never link back
+  // to the tournament at all.
+  const t = tournaments.find(x=>x.id === m.tournamentId)
+    || (viewedTournamentPublic && viewedTournamentPublic.id === m.tournamentId ? viewedTournamentPublic : null);
   if(!t) return;
   const f = allFixtures(t).find(x=>x.id === m.fixtureId);
   if(!f) return;
@@ -3050,7 +3190,7 @@ async function linkResultToTournament(m){
     t.knockout = generateKnockout(t);
   }
   saveTours();
-  if(cloudReady() && getUser()) await saveTournament(t);
+  await saveTourWrite(t);
 }
 
 /* ---------------- MODALS ---------------- */
@@ -3739,7 +3879,7 @@ async function removeTeam(id){
 /* ---------------- TOURNAMENTS ---------------- */
 
 const STATUS_BADGE = {
-  upcoming: ['open','Upcoming'], live: ['live','Live'],
+  upcoming: ['open','Upcoming'], live: ['live','Live'], paused: ['cancelled','Paused'],
   completed: ['done','Completed'], cancelled: ['cancelled','Cancelled']
 };
 function statusBadgeHTML(status){
@@ -3987,7 +4127,47 @@ function isTourOwner(t){
   if(!t) return false;
   if(tournaments.some(x=>x.id === t.id)) return true;
   const u = getUser();
-  return !!(u && t.ownerId && t.ownerId === u.id);
+  if(u && t.ownerId && t.ownerId === u.id) return true;
+  // Tournament Organizer Control Center — Phase 3: widened to also trust a
+  // cached 'owner' role row (tournament_roles, granted server-side — see
+  // supabase.sql). Populated by openTournamentView() below, never fetched
+  // synchronously here, so this stays a plain, synchronous boolean check
+  // exactly like it always has been; every existing call site keeps working
+  // unchanged. A manager/scorer/official role in the cache does NOT satisfy
+  // this — those roles get read access to the tournament (Phase 2's RLS
+  // policy) but no management affordances yet, that's Phase 4/7.
+  return tourRoleCache[t.id] === 'owner';
+}
+
+/* Tournament Organizer Control Center — Phase 4. True for the actual owner
+   OR a granted 'manager' — day-to-day tournament management (edit details,
+   fixtures/knockout, pause/resume/lock/unlock/cancel), but never delete
+   (that stays strictly isTourOwner()-gated) and never anything a locked
+   tournament's own server-side policy would reject anyway — this mirrors
+   the real boundary in supabase.sql, it isn't a replacement for it. */
+function canManageTour(t){
+  if(!t) return false;
+  if(isTourOwner(t)) return true;
+  return tourRoleCache[t.id] === 'manager';
+}
+
+/* Tournament Organizer Control Center — Phase 7. A manager/owner can always
+   play any fixture (unchanged from Phase 4). A scorer/official can only
+   play the ONE fixture they were specifically assigned to (fixtureAssignCache,
+   populated by loadTourExtras()) — being granted the 'scorer' role on the
+   tournament alone isn't enough, they also need the organizer to have
+   pointed them at this particular fixture via "Assign". */
+function fixtureAssignment(t, f){
+  const m = fixtureAssignCache[t.id];
+  return (m && m[f.id]) || null;
+}
+function canScoreFixture(t, f){
+  if(canManageTour(t)) return true;
+  const role = tourRoleCache[t.id];
+  if(role !== 'scorer' && role !== 'official') return false;
+  const a = fixtureAssignment(t, f);
+  const u = getUser();
+  return !!(a && u && (a.assignedScorerUid === u.id || a.assignedOfficialUid === u.id));
 }
 
 /* Opens a tournament for viewing. Synchronous for your own (already
@@ -3997,7 +4177,10 @@ function isTourOwner(t){
 async function openTournamentView(id){
   openTourId = id; tourTab = 'overview';
   const mine = tournaments.find(x=>x.id === id);
-  if(mine){ viewedTournamentPublic = null; tourLoading = false; tourLoadError = ''; go('tournament'); return; }
+  if(mine){
+    viewedTournamentPublic = null; tourLoading = false; tourLoadError = '';
+    go('tournament'); loadTourExtras(id); return;
+  }
   viewedTournamentPublic = null; tourLoadError = '';
   tourLoading = true; go('tournament');
   const t = cloudReady() ? await fetchTournamentById(id) : null;
@@ -4006,6 +4189,40 @@ async function openTournamentView(id){
   if(!t){ tourLoadError = "This tournament is private, was deleted, or the link isn't valid."; render(); return; }
   viewedTournamentPublic = t;
   render();
+  loadMyTourRole(id);
+  loadTourExtras(id);
+}
+
+/* Fetches and caches the viewer's own role on a tournament (Phase 3) — only
+   worth a round trip when local ownership doesn't already answer the
+   question, and only for a signed-in cloud session (a role grant is
+   meaningless without one). Re-renders the tournament screen afterward so a
+   manager/scorer/official sees their role badge appear without needing to
+   navigate away and back. */
+async function loadMyTourRole(id){
+  if(tourRoleCache[id] || !cloudReady() || !getUser()) return;
+  const role = await fetchMyTournamentRole(id);
+  if(!role) return;
+  tourRoleCache[id] = role;
+  if(openTourId === id && screen === 'tournament') renderTournament();
+}
+
+/* Tournament Organizer Control Center — Phase 5/7: fixture scorer/official
+   assignments (fixtureAssignCache) and which JSONB teams have an
+   account-linked roster enabled (tourTeamsCache). Runs for every viewer,
+   signed in or not — the fixtures/tournament_teams RLS already allows a
+   public tournament's rows to be read by anyone, same as the tournament
+   itself, and canScoreFixture() below needs this cache to exist even for a
+   guest link. */
+async function loadTourExtras(id){
+  if(!cloudReady()) return;
+  const [fixRows, teamRows] = await Promise.all([
+    fetchTournamentFixtureRows(id), fetchTournamentTeams(id)
+  ]);
+  fixtureAssignCache[id] = Object.fromEntries(fixRows.map(f=>
+    [f.id, { assignedScorerUid: f.assignedScorerUid, assignedOfficialUid: f.assignedOfficialUid }]));
+  tourTeamsCache[id] = teamRows;
+  if(openTourId === id && screen === 'tournament') renderTournament();
 }
 
 function renderTournament(){
@@ -4024,11 +4241,26 @@ function renderTournament(){
   statusBox.classList.add('hidden'); content.classList.remove('hidden');
 
   const owner = isTourOwner(t);
+  const manage = canManageTour(t);
   const status = deriveStatus(t, t.status);
 
   $('tourName').textContent = t.name;
-  $('tourMenuBtn').classList.toggle('hidden', !owner);
-  $('tourStatusBadge').innerHTML = statusBadgeHTML(status);
+  $('tourMenuBtn').classList.toggle('hidden', !manage);
+  $('tourStatusBadge').innerHTML = statusBadgeHTML(status) + (t.locked ? ' &#128274;' : '') + (t.verifiedAt ? ' &#9989; Verified' : '');
+
+  // Phase 3: a granted, non-owner role is visibility only for now — no
+  // management buttons come with it yet (Phase 4/7) — so this badge is
+  // purely informational: "you have read access here because you were
+  // assigned a role", not "you can manage this tournament".
+  const myRole = tourRoleCache[t.id];
+  const roleBadge = $('tourRoleBadge');
+  const ROLE_LABEL = { manager:'Manager', scorer:'Scorer', official:'Official' };
+  if(!owner && myRole && ROLE_LABEL[myRole]){
+    roleBadge.textContent = 'Your role: ' + ROLE_LABEL[myRole];
+    roleBadge.classList.remove('hidden');
+  } else {
+    roleBadge.classList.add('hidden');
+  }
 
   const champ = tournamentChampion(t);
   $('championBox').innerHTML = champ
@@ -4036,14 +4268,15 @@ function renderTournament(){
 
   document.querySelectorAll('#screen-tournament .pill').forEach(p=>
     p.classList.toggle('active', p.dataset.tab === tourTab));
-  ['overview','table','fixtures','knockout','teams','organizer','rules'].forEach(x=>
+  ['overview','table','fixtures','knockout','teams','stats','organizer','rules'].forEach(x=>
     $('tourTab' + x[0].toUpperCase() + x.slice(1)).classList.toggle('hidden', x !== tourTab));
 
   if(tourTab === 'overview') renderTourOverview(t, owner, status);
   else if(tourTab === 'table') renderTourTable(t);
-  else if(tourTab === 'fixtures') renderTourFixtures(t, owner);
-  else if(tourTab === 'knockout') renderTourKnockout(t, owner);
-  else if(tourTab === 'teams') renderTourTeams(t, owner);
+  else if(tourTab === 'fixtures') renderTourFixtures(t, manage);
+  else if(tourTab === 'knockout') renderTourKnockout(t, manage);
+  else if(tourTab === 'teams') renderTourTeams(t, owner, manage, status);
+  else if(tourTab === 'stats') renderTourStats(t, manage);
   else if(tourTab === 'organizer') renderTourOrganizer(t);
   else if(tourTab === 'rules') renderTourRules(t, owner);
 }
@@ -4139,19 +4372,40 @@ function renderTourTable(t){
   </div>`;
 }
 
-function renderTourFixtures(t, owner){
-  const rows = t.fixtures.map(f=>fixtureRowHTML(t, f, owner)).join('');
+/* Tournament Organizer Control Center — Phase 7. Fires a background fetch
+   (no await — the row markup renders with whatever's already cached, then
+   re-renders once names arrive) for any assigned scorer/official whose
+   profile isn't already in profileCache, same pattern as
+   renderTourOrganizer() elsewhere in this file. */
+function resolveFixtureAssigneeNames(t, fixtures){
+  const uids = new Set();
+  fixtures.forEach(f=>{
+    const a = fixtureAssignment(t, f);
+    if(a){
+      if(a.assignedScorerUid) uids.add(a.assignedScorerUid);
+      if(a.assignedOfficialUid) uids.add(a.assignedOfficialUid);
+    }
+  });
+  const missing = [...uids].filter(u=>!profileCache[u]);
+  if(missing.length) resolveProfiles(missing).then(()=>{
+    if(openTourId === t.id && screen === 'tournament') renderTournament();
+  });
+}
+
+function renderTourFixtures(t, manage){
+  resolveFixtureAssigneeNames(t, t.fixtures);
+  const rows = t.fixtures.map(f=>fixtureRowHTML(t, f, manage)).join('');
   $('tourTabFixtures').innerHTML = `<div class="card">
     <div class="sec-head"><h2>League Fixtures</h2>
-      ${owner ? `<button class="icon-btn" data-action="regen-fixtures">Regenerate</button>` : ''}</div>
+      ${manage ? `<button class="icon-btn" data-action="regen-fixtures">Regenerate</button>` : ''}</div>
     ${rows || '<div class="empty-note">No fixtures yet.</div>'}
   </div>`;
 }
 
-function fixtureRowHTML(t, f, owner){
+function fixtureRowHTML(t, f, manage){
   const done = f.status === 'completed' && f.result;
   const a = teamNameById(t, f.teamAId), b = teamNameById(t, f.teamBId);
-  const canPlay = owner && f.teamAId && f.teamBId && !done;
+  const canPlay = canScoreFixture(t, f) && f.teamAId && f.teamBId && !done;
   let score = '';
   if(done){
     const r = f.result;
@@ -4159,22 +4413,33 @@ function fixtureRowHTML(t, f, owner){
       : teamNameById(t, r.winnerId) + ' won';
     score = `<div class="fx-score">${a} ${r.a.runs}/${r.a.wickets} · ${b} ${r.b.runs}/${r.b.wickets} — ${esc(win)}</div>`;
   }
+  // Assignment info is manager-only display — a scorer/official just sees
+  // their own Play button appear on the fixture they were pointed at, they
+  // don't need a roster of who else is assigned to other fixtures.
+  const assign = fixtureAssignment(t, f);
+  const scorerName = assign && assign.assignedScorerUid ? (profileCache[assign.assignedScorerUid]?.displayName || 'Assigned') : '';
+  const officialName = assign && assign.assignedOfficialUid ? (profileCache[assign.assignedOfficialUid]?.displayName || 'Assigned') : '';
+  const assignLine = manage && (scorerName || officialName)
+    ? `<div class="fx-m">${scorerName ? 'Scorer: ' + esc(scorerName) : ''}${scorerName && officialName ? ' · ' : ''}${officialName ? 'Official: ' + esc(officialName) : ''}</div>`
+    : '';
   return `<div class="fixture-row">
     <div class="fx-b">
       <div class="fx-t">${esc(a)} v ${esc(b)}</div>
       <div class="fx-m">${f.stage === 'league' ? 'Round ' + f.round : esc(f.stage.replace('-',' '))}
         ${f.date ? ' · ' + esc(fmtWhen(f.date)) : ''}${f.venue ? ' · ' + esc(f.venue) : ''}</div>
+      ${assignLine}
       ${score}
     </div>
-    <div style="display:flex;gap:6px;flex-shrink:0;">
-      ${owner && !done ? `<button class="icon-btn" data-action="set-fixture-date" data-id="${esc(f.id)}">Date</button>` : ''}
+    <div style="display:flex;gap:6px;flex-shrink:0;flex-wrap:wrap;">
+      ${manage && !done ? `<button class="icon-btn" data-action="set-fixture-date" data-id="${esc(f.id)}">Date</button>` : ''}
+      ${manage && !done && f.teamAId && f.teamBId ? `<button class="icon-btn" data-action="assign-fixture" data-id="${esc(f.id)}">Assign</button>` : ''}
       ${canPlay ? `<button class="icon-btn" data-action="play-fixture" data-id="${esc(f.id)}">Play</button>` : ''}
       ${done ? `<button class="icon-btn" data-action="view-fixture" data-id="${esc(f.id)}">Card</button>` : ''}
     </div>
   </div>`;
 }
 
-function renderTourKnockout(t, owner){
+function renderTourKnockout(t, manage){
   const box = $('tourTabKnockout');
   if(t.format === 'league'){
     box.innerHTML = `<div class="card"><div class="empty-note">This is a league-only tournament.<br>The team top of the table wins it.</div></div>`;
@@ -4184,11 +4449,11 @@ function renderTourKnockout(t, owner){
     const ready = leagueComplete(t);
     box.innerHTML = `<div class="card">
       <div class="empty-note">${ready
-        ? 'League complete.' + (owner ? ' Generate the knockout bracket from the final table.' : ' The knockout bracket hasn\'t been generated yet.')
-        : owner
+        ? 'League complete.' + (manage ? ' Generate the knockout bracket from the final table.' : ' The knockout bracket hasn\'t been generated yet.')
+        : manage
           ? 'The bracket unlocks when every league fixture has been played.<br>You can also generate it early if you want.'
           : 'The knockout bracket hasn\'t started yet.'}</div>
-      ${owner ? `<button class="btn" data-action="gen-knockout">Generate Knockout Bracket</button>` : ''}
+      ${manage ? `<button class="btn" data-action="gen-knockout">Generate Knockout Bracket</button>` : ''}
     </div>`;
     return;
   }
@@ -4202,17 +4467,20 @@ function renderTourKnockout(t, owner){
     const win = r && r.winnerId === id;
     return `<div class="bm-side ${win ? 'win':''}"><span>${esc(nm)}${win ? ' ✓':''}</span><span class="s">${sc}</span></div>`;
   };
+  resolveFixtureAssigneeNames(t, t.knockout);
   const mk = (f, label)=>`<div class="bracket-match">
     <div class="stat-dim" style="font-size:10.5px;letter-spacing:1px;text-transform:uppercase;margin-bottom:4px;">${label}</div>
     ${side(t, f, 'a')}${side(t, f, 'b')}
-    <div style="display:flex;gap:6px;margin-top:8px;">
-      ${owner && f.teamAId && f.teamBId && f.status !== 'completed'
+    <div style="display:flex;gap:6px;margin-top:8px;flex-wrap:wrap;">
+      ${manage && f.teamAId && f.teamBId && f.status !== 'completed'
+        ? `<button class="icon-btn" data-action="assign-fixture" data-id="${esc(f.id)}">Assign</button>` : ''}
+      ${canScoreFixture(t, f) && f.teamAId && f.teamBId && f.status !== 'completed'
         ? `<button class="icon-btn" data-action="play-fixture" data-id="${esc(f.id)}">Play</button>` : ''}
       ${f.status === 'completed' ? `<button class="icon-btn" data-action="view-fixture" data-id="${esc(f.id)}">Card</button>` : ''}
     </div></div>`;
 
   box.innerHTML = `<div class="card"><div class="sec-head"><h2>Knockout</h2>
-      ${owner ? `<button class="icon-btn" data-action="gen-knockout">Reset bracket</button>` : ''}</div>
+      ${manage ? `<button class="icon-btn" data-action="gen-knockout">Reset bracket</button>` : ''}</div>
     <div class="bracket">
       ${semis.length ? `<div class="bracket-round"><h5>Semi-finals</h5>
         ${semis.map((f,i)=>mk(f, 'Semi-final ' + (i+1))).join('')}</div>` : ''}
@@ -4220,22 +4488,423 @@ function renderTourKnockout(t, owner){
     </div></div>`;
 }
 
-function renderTourTeams(t, owner){
+/* ---------------- Tournament Organizer Control Center — Phase 7: fixture
+   scorer/official assignment (owner/manager only). Assigning someone here
+   also grants them the underlying tournament_roles row if they don't
+   already have it — grant_tournament_role() is idempotent (ON CONFLICT
+   updates in place), so re-assigning an already-granted person is harmless,
+   and this is what lets an organizer assign straight from a player search
+   without a separate "grant role" step first. ---------------- */
+
+function openAssignFixtureModal(fixtureId){
+  const t = currentTour(); if(!t || !canManageTour(t)) return;
+  const f = allFixtures(t).find(x=>x.id === fixtureId); if(!f) return;
+  assignFixtureModalId = fixtureId;
+  assignFixtureSearchResults = [];
+  const assign = fixtureAssignment(t, f);
+  const scorerName = assign?.assignedScorerUid ? (profileCache[assign.assignedScorerUid]?.displayName || 'Assigned') : null;
+  const officialName = assign?.assignedOfficialUid ? (profileCache[assign.assignedOfficialUid]?.displayName || 'Assigned') : null;
+  openModal(`<h3>Assign scorer / official</h3>
+    <div class="stat-dim" style="margin-bottom:10px;">${esc(teamNameById(t, f.teamAId))} v ${esc(teamNameById(t, f.teamBId))}</div>
+    <div class="kv-list" style="margin-bottom:14px;">
+      <div class="kv-row"><div class="kv-k">Scorer</div><div class="kv-v">${scorerName
+        ? esc(scorerName) + ` &middot; <button class="icon-btn" data-action="unassign-fixture" data-role="scorer">Remove</button>`
+        : '<span class="stat-dim">None assigned</span>'}</div></div>
+      <div class="kv-row"><div class="kv-k">Official</div><div class="kv-v">${officialName
+        ? esc(officialName) + ` &middot; <button class="icon-btn" data-action="unassign-fixture" data-role="official">Remove</button>`
+        : '<span class="stat-dim">None assigned</span>'}</div></div>
+    </div>
+    <label>Search a player by username</label>
+    <div class="row">
+      <input type="text" id="assignSearchInput" placeholder="@username">
+      <button class="icon-btn" data-action="assign-search-players" style="flex:0 0 auto;">Search</button>
+    </div>
+    <div id="assignSearchResults" style="margin-top:8px;"></div>
+    <button class="btn secondary" data-action="close" style="margin-top:14px;">Close</button>`);
+}
+
+async function assignSearchPlayersAction(){
+  const q = $('assignSearchInput').value.trim();
+  if(!q) return;
+  assignFixtureSearchResults = await searchProfiles(q);
+  renderAssignSearchResults();
+}
+
+function renderAssignSearchResults(){
+  const box = $('assignSearchResults'); if(!box) return;
+  box.innerHTML = assignFixtureSearchResults.length ? assignFixtureSearchResults.map(p=>`
+    <div class="list-pick">
+      <div class="lp-n">${esc(p.displayName || '')} <span class="stat-dim">@${esc(p.handle)}</span></div>
+      <button class="icon-btn" data-action="assign-fixture-role" data-uid="${esc(p.uid)}" data-role="scorer">Scorer</button>
+      <button class="icon-btn" data-action="assign-fixture-role" data-uid="${esc(p.uid)}" data-role="official">Official</button>
+    </div>`).join('') : '<div class="stat-dim">No players found.</div>';
+}
+
+async function assignFixtureRoleAction(uid, role){
+  const t = currentTour(); if(!t || !canManageTour(t) || !assignFixtureModalId) return;
+  const grantOk = await grantTournamentRole(t.id, uid, role);
+  if(!grantOk){ toast('Could not grant the role — try again'); return; }
+  const ok = await assignFixtureRoleCloud(assignFixtureModalId, uid, role);
+  closeModal();
+  if(!ok){ toast('Could not assign — try again'); return; }
+  await loadTourExtras(t.id);
+  toast('Assigned');
+}
+
+async function unassignFixtureRoleAction(role){
+  const t = currentTour(); if(!t || !canManageTour(t) || !assignFixtureModalId) return;
+  const ok = await unassignFixtureRoleCloud(assignFixtureModalId, role);
+  closeModal();
+  if(!ok){ toast('Could not remove — try again'); return; }
+  await loadTourExtras(t.id);
+  toast('Removed');
+}
+
+/* ---------------- Tournament Organizer Control Center — Phase 8: manager-
+   only "Announce" compose modal. Deliberately narrow compared to the admin
+   Notifications panel elsewhere in this file — an organizer can only pick
+   among the three tournament-scoped audiences (see organizerCreateNotification
+   in cloud.js / organizer_create_notification() in supabase.sql, which both
+   refuse anything else), no scheduling, no templates, no image. Sends
+   immediately via the same sendNotificationNow() the admin path uses — once
+   a notifications row exists, sending it works identically regardless of
+   who created it. ---------------- */
+
+function openAnnounceTourModal(){
+  const t = currentTour(); if(!t || !canManageTour(t)) return;
+  const linkedTeams = Object.values(linkedRosterByLocalId(t));
+  openModal(`<h3>Send an announcement</h3>
+    <label>Title</label>
+    <input type="text" id="announceTitle" placeholder="e.g. Match reschedule" maxlength="120">
+    <label style="margin-top:10px;">Message</label>
+    <textarea id="announceMessage" rows="4" placeholder="What do you want to tell them?"></textarea>
+    <label style="margin-top:10px;">Send to</label>
+    <select id="announceAudience">
+      <option value="tournament_participants">All participants</option>
+      <option value="tournament_officials">Officials (scorers &amp; umpires)</option>
+      ${linkedTeams.length ? '<option value="team_members">One team\'s roster</option>' : ''}
+    </select>
+    ${linkedTeams.length ? `<div id="announceTeamPicker" style="display:none;margin-top:10px;">
+      <label>Team</label>
+      <select id="announceTeamId">
+        ${linkedTeams.map(r=>`<option value="${esc(r.id)}">${esc(r.name)}</option>`).join('')}
+      </select>
+    </div>` : ''}
+    <button class="btn primary" data-action="send-announce-tour" style="margin-top:14px;">Send</button>
+    <button class="btn secondary" data-action="close">Cancel</button>`);
+  // Direct listener, not the data-action click delegator — this needs to
+  // react to 'change', mirroring the existing deliverySel pattern elsewhere
+  // in this file rather than forcing a select's native dropdown through the
+  // click-only delegator.
+  if(linkedTeams.length){
+    $('announceAudience').addEventListener('change', ()=>{
+      const picker = $('announceTeamPicker');
+      if(picker) picker.style.display = $('announceAudience').value === 'team_members' ? '' : 'none';
+    });
+  }
+}
+
+async function sendAnnounceTourAction(){
+  const t = currentTour(); if(!t || !canManageTour(t)) return;
+  const title = ($('announceTitle')?.value || '').trim();
+  const message = ($('announceMessage')?.value || '').trim();
+  const audienceType = $('announceAudience')?.value || 'tournament_participants';
+  if(!title || !message){ toast('Add a title and a message'); return; }
+  const audienceFilter = audienceType === 'team_members'
+    ? { team_id: $('announceTeamId')?.value }
+    : { tournament_id: t.id };
+  if(audienceType === 'team_members' && !audienceFilter.team_id){ toast('Pick a team'); return; }
+  const created = await organizerCreateNotification({
+    tournamentId: t.id, type:'tournament', title, message, audienceType, audienceFilter
+  });
+  if(!created){ toast('Could not create the announcement — try again'); return; }
+  closeModal();
+  try{
+    await sendNotificationNow(created.id);
+    toast('Announcement sent');
+  }catch(err){
+    console.error('sendAnnounceTourAction send failed:', err);
+    toast('Saved, but sending failed — try again from Notifications');
+  }
+}
+
+const TOUR_MANAGE_STATUS = { upcoming:'Upcoming', live:'Live', paused:'Paused' };
+
+/* Tournament Organizer Control Center — Phase 5: which JSONB teams (by
+   their local, tournament-scoped id — tm.id) have an account-linked roster
+   enabled, keyed for O(1) lookup while rendering the Teams tab. */
+function linkedRosterByLocalId(t){
+  const rows = tourTeamsCache[t.id] || [];
+  return Object.fromEntries(rows.filter(r=>r.localTeamId).map(r=>[r.localTeamId, r]));
+}
+
+function renderTourTeams(t, owner, manage, status){
+  const linked = linkedRosterByLocalId(t);
   $('tourTabTeams').innerHTML = `<div class="card">
     <div class="sec-head"><h2>Teams</h2></div>
-    ${t.teams.map(tm=>`<div class="hist-item">
+    ${t.teams.map(tm=>{
+      const link = linked[tm.id];
+      return `<div class="hist-item">
       <div style="display:flex;align-items:center;gap:10px;">
         ${initialsBadge(tm.name, 32)}<div class="batter-name">${esc(tm.name)}</div>
       </div>
-      ${owner ? `<div class="d">${(rosterFor(tm.name) || []).length} players</div>` : ''}
-    </div>`).join('')}
-    ${owner ? `<button class="btn secondary small" data-action="delete-tour">Delete this tournament</button>` : ''}
+      <div style="display:flex;align-items:center;gap:8px;">
+        ${manage ? `<div class="d">${(rosterFor(tm.name) || []).length} players</div>` : ''}
+        ${link
+          ? `<button class="icon-btn" data-action="manage-roster" data-team-id="${esc(link.id)}">Roster</button>`
+          : (manage ? `<button class="icon-btn" data-action="enable-roster" data-local-id="${esc(tm.id)}" data-name="${esc(tm.name)}">Enable roster</button>` : '')}
+      </div>
+    </div>`;
+    }).join('')}
+    ${manage ? `
+      <div class="sec-head" style="margin-top:16px;"><h2>Tournament Controls</h2></div>
+      <div class="stat-dim" style="margin-bottom:8px;">
+        ${t.locked ? 'Locked — pause/resume/cancel are disabled until an owner or manager unlocks it.' : 'Status: ' + esc(TOUR_MANAGE_STATUS[status] || status)}
+      </div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;">
+        ${status === 'paused'
+          ? `<button class="btn secondary small" data-action="resume-tour" ${t.locked ? 'disabled' : ''}>Resume</button>`
+          : `<button class="btn secondary small" data-action="pause-tour" ${t.locked || status === 'cancelled' || status === 'completed' ? 'disabled' : ''}>Pause</button>`}
+        <button class="btn secondary small" data-action="${t.locked ? 'unlock-tour' : 'lock-tour'}">${t.locked ? 'Unlock' : 'Lock'}</button>
+        ${status !== 'cancelled' ? `<button class="btn secondary small" data-action="cancel-tour-organizer" ${t.locked ? 'disabled' : ''}>Cancel tournament</button>` : ''}
+        <button class="btn secondary small" data-action="open-announce-tour">Announce</button>
+      </div>` : ''}
+    ${owner ? `<button class="btn secondary small" data-action="delete-tour" style="margin-top:14px;">Delete this tournament</button>` : ''}
   </div>`;
 }
 
+/* ---------------------------------------------------------------------------
+   Tournament Organizer Control Center — Phase 9: statistics + disputes.
+   Manager/owner sees real cross-scorer statistics (needs the Phase 9 RLS
+   grant on `matches`) plus every dispute raised for their tournament, with
+   a resolve action. Everyone else — including a guest link — just sees a
+   "Report an issue" button; fetchTournamentDisputes() for them comes back
+   scoped by RLS to only their own past reports, never anyone else's.
+   --------------------------------------------------------------------------- */
+
+const DISPUTE_STATUS_BADGE = {
+  open:['open','Open'], under_review:['open','Under review'],
+  resolved:['done','Resolved'], dismissed:['cancelled','Dismissed']
+};
+const DISPUTE_CATEGORY_LABEL = {
+  scoring:'Scoring error', conduct:'Conduct', scheduling:'Scheduling',
+  eligibility:'Eligibility', other:'Other'
+};
+
+function renderTourStats(t, manage){
+  $('tourTabStats').innerHTML = '<div class="card"><div class="empty-note">Loading…</div></div>';
+  (async ()=>{
+    if(manage){
+      const [ms, disputes] = await Promise.all([
+        fetchTournamentMatches(t.id), fetchTournamentDisputes(t.id)
+      ]);
+      tourMatchesCache[t.id] = ms;
+      tourDisputesCache[t.id] = disputes;
+    } else if(cloudReady() && getUser()){
+      tourDisputesCache[t.id] = await fetchTournamentDisputes(t.id);
+    }
+    // Bail if the user navigated away from this tab/tournament while the
+    // fetch was in flight — same guard renderTourOrganizer() already uses.
+    const cur = currentTour();
+    if(!cur || cur.id !== t.id || tourTab !== 'stats') return;
+    renderTourStatsContent(t, manage);
+  })();
+}
+
+function renderTourStatsContent(t, manage){
+  const ms = (tourMatchesCache[t.id] || []).filter(m=>m && m.completed);
+  const disputes = tourDisputesCache[t.id] || [];
+
+  let statsHTML = '';
+  if(manage){
+    const sum = overallSummary(ms);
+    statsHTML = ms.length ? (
+      `<div class="card"><div class="sec-head"><h2>Tournament statistics</h2></div>
+        <div class="stat-strip">
+          ${[{v:sum.matches,l:'Matches'},{v:sum.runs,l:'Runs'},{v:sum.wickets,l:'Wickets'},{v:sum.runRate,l:'Run rate'}]
+            .map(x=>`<div class="stat-box"><div class="sv">${x.v}</div><div class="sl">${x.l}</div></div>`).join('')}
+        </div>
+      </div>` +
+      (()=>{
+        const careers = buildCareers(ms);
+        return rankCard('Most runs', topRunScorers(careers, 8), p=>({
+          val:p.runs, lab:'Runs',
+          sub:`${p.innings} inns · SR ${p.strikeRate}` + (p.average !== null ? ` · Avg ${p.average}` : '')
+        })) +
+        rankCard('Most wickets', topWicketTakers(careers, 8), p=>({
+          val:p.wickets, lab:'Wkts',
+          sub:`${p.overs.toFixed(1)} ov · Econ ${p.economy}` + (p.bowlAvg !== null ? ` · Avg ${p.bowlAvg}` : '')
+        })) +
+        rankCard('Best batting performances', bestBattingPerformances(ms, 5), p=>({
+          val:p.runs + (p.notOut ? '*' : ''), lab:'Runs', sub:`${p.balls} balls · vs ${p.vs}`
+        })) +
+        rankCard('Best bowling performances', bestBowlingPerformances(ms, 5), p=>({
+          val:p.wickets + '/' + p.runs, lab:'Figures', sub:`${fmtOvers(p.balls)} ov · vs ${p.vs}`
+        }));
+      })()
+    ) : `<div class="card"><div class="empty-note">No completed matches yet — statistics appear here once fixtures are scored.</div></div>`;
+  }
+
+  const canResolve = manage;
+  const disputesHTML = `<div class="card">
+    <div class="sec-head"><h2>${manage ? 'Disputes' : 'Your reports'}</h2>
+      <button class="icon-btn" data-action="open-report-dispute">Report an issue</button>
+    </div>
+    ${disputes.length ? disputes.map(d=>{
+      const [cls, label] = DISPUTE_STATUS_BADGE[d.status] || DISPUTE_STATUS_BADGE.open;
+      return `<div class="hist-item" style="flex-wrap:wrap;align-items:flex-start;">
+        <div style="min-width:0;flex:1;">
+          <div class="batter-name">${esc(DISPUTE_CATEGORY_LABEL[d.category] || 'Other')}</div>
+          <div class="d">${esc(d.description)}</div>
+          ${d.resolutionNote ? `<div class="d" style="margin-top:4px;"><b>Resolution:</b> ${esc(d.resolutionNote)}</div>` : ''}
+        </div>
+        <span class="badge ${cls}">${label}</span>
+        ${canResolve && (d.status === 'open' || d.status === 'under_review') ? `
+          <div style="display:flex;gap:6px;margin-top:8px;width:100%;">
+            <button class="icon-btn" data-action="resolve-dispute" data-id="${esc(d.id)}" data-status="under_review">Reviewing</button>
+            <button class="icon-btn" data-action="resolve-dispute" data-id="${esc(d.id)}" data-status="resolved">Resolve</button>
+            <button class="icon-btn" data-action="resolve-dispute" data-id="${esc(d.id)}" data-status="dismissed">Dismiss</button>
+          </div>` : ''}
+      </div>`;
+    }).join('') : `<div class="empty-note">${manage ? 'No disputes raised for this tournament.' : "You haven't reported anything for this tournament."}</div>`}
+  </div>`;
+
+  $('tourTabStats').innerHTML = statsHTML + disputesHTML;
+}
+
+function openReportDisputeModal(){
+  const t = currentTour(); if(!t) return;
+  if(!(cloudReady() && getUser())){ toast('Sign in to report an issue'); return; }
+  openModal(`<h3>Report an issue</h3>
+    <label>Category</label>
+    <select id="disputeCategory">
+      <option value="scoring">Scoring error</option>
+      <option value="conduct">Conduct</option>
+      <option value="scheduling">Scheduling</option>
+      <option value="eligibility">Eligibility</option>
+      <option value="other">Other</option>
+    </select>
+    <label style="margin-top:10px;">What happened?</label>
+    <textarea id="disputeDescription" rows="4" placeholder="Describe the issue"></textarea>
+    <button class="btn primary" data-action="submit-dispute" style="margin-top:14px;">Submit</button>
+    <button class="btn secondary" data-action="close">Cancel</button>`);
+}
+
+async function submitDisputeAction(){
+  const t = currentTour(); if(!t) return;
+  const description = ($('disputeDescription')?.value || '').trim();
+  const category = $('disputeCategory')?.value || 'other';
+  if(!description){ toast('Describe what happened'); return; }
+  try{
+    await raiseDispute(t.id, description, category, null);
+    closeModal();
+    toast('Reported — the organizer can see this now');
+    if(tourTab === 'stats') renderTourStats(t, canManageTour(t));
+  }catch(err){
+    console.error('submitDisputeAction failed:', err);
+    toast('Could not submit — try again');
+  }
+}
+
+async function resolveDisputeAction(disputeId, status){
+  const t = currentTour(); if(!t || !canManageTour(t)) return;
+  const note = status === 'resolved' || status === 'dismissed'
+    ? (window.prompt('Add a resolution note (optional):') || null) : null;
+  const ok = await resolveDispute(disputeId, status, note);
+  if(!ok){ toast('Could not update — try again'); return; }
+  toast('Updated');
+  renderTourStats(t, true);
+}
+
+/* ---------------- Tournament Organizer Control Center — Phase 5: account-
+   linked roster modal. Read-only for anyone who can see the team (RLS
+   already scopes that — see supabase.sql); invite/remove/captain actions
+   only render for a manager/owner, mirroring how every other manage-only
+   control in this file works. ---------------- */
+
+async function enableTeamRosterAction(localId, name){
+  const t = currentTour(); if(!t || !canManageTour(t)) return;
+  const row = await createTournamentTeam(t.id, name, localId);
+  if(!row){ toast('Could not enable a roster for this team — try again'); return; }
+  tourTeamsCache[t.id] = [...(tourTeamsCache[t.id] || []), row];
+  render();
+  openRosterModal(row.id);
+}
+
+async function openRosterModal(teamId){
+  rosterModalTeamId = teamId;
+  rosterModalSearchResults = [];
+  rosterModalRoster = await fetchTeamRoster(teamId);
+  await resolveProfiles(rosterModalRoster.map(r=>r.uid));
+  renderRosterModal();
+}
+
+function renderRosterModal(){
+  const t = currentTour();
+  const manage = !!(t && canManageTour(t));
+  const ROSTER_BADGE = { accepted:['done','Accepted'], declined:['cancelled','Declined'], invited:['open','Invited'] };
+  const rows = rosterModalRoster.map(r=>{
+    const p = profileCache[r.uid] || { displayName:'Player', handle:'' };
+    const [cls, label] = ROSTER_BADGE[r.status] || ROSTER_BADGE.invited;
+    return `<div class="list-pick" style="flex-wrap:wrap;">
+      <div class="lp-n">${esc(p.displayName || 'Player')} <span class="stat-dim">@${esc(p.handle || '')}</span>${r.isCaptain ? ' <b>(C)</b>' : ''}</div>
+      <span class="badge ${cls}">${label}</span>
+      ${manage && r.status === 'accepted' && !r.isCaptain ? `<button class="icon-btn" data-action="roster-set-captain" data-uid="${esc(r.uid)}">Make captain</button>` : ''}
+      ${manage ? `<button class="icon-btn" data-action="roster-remove-player" data-uid="${esc(r.uid)}">Remove</button>` : ''}
+    </div>`;
+  }).join('') || '<div class="empty-note">No players invited yet.</div>';
+
+  openModal(`<h3>Team roster</h3>
+    ${rows}
+    ${manage ? `
+      <label style="margin-top:14px;">Invite a player by username</label>
+      <div class="row">
+        <input type="text" id="rosterSearchInput" placeholder="@username">
+        <button class="icon-btn" data-action="roster-search-players" style="flex:0 0 auto;">Search</button>
+      </div>
+      <div id="rosterSearchResults" style="margin-top:8px;"></div>
+    ` : ''}
+    <button class="btn secondary" data-action="close" style="margin-top:14px;">Close</button>`);
+}
+
+async function rosterSearchPlayersAction(){
+  const q = $('rosterSearchInput').value.trim();
+  if(!q) return;
+  rosterModalSearchResults = await searchProfiles(q);
+  const box = $('rosterSearchResults'); if(!box) return;
+  box.innerHTML = rosterModalSearchResults.length ? rosterModalSearchResults.map(p=>`
+    <div class="list-pick">
+      <div class="lp-n">${esc(p.displayName || '')} <span class="stat-dim">@${esc(p.handle)}</span></div>
+      <button class="icon-btn" data-action="roster-invite-player" data-uid="${esc(p.uid)}">Invite</button>
+    </div>`).join('') : '<div class="stat-dim">No players found.</div>';
+}
+
+async function rosterInvitePlayerAction(uid){
+  if(!rosterModalTeamId) return;
+  const ok = await invitePlayerToTeam(rosterModalTeamId, uid);
+  if(!ok){ toast('Could not invite — try again'); return; }
+  toast('Invited');
+  await openRosterModal(rosterModalTeamId);
+}
+
+async function rosterSetCaptainAction(uid){
+  if(!rosterModalTeamId) return;
+  const ok = await setTeamCaptain(rosterModalTeamId, uid);
+  if(!ok){ toast('Could not set captain — try again'); return; }
+  await openRosterModal(rosterModalTeamId);
+}
+
+async function rosterRemovePlayerAction(uid){
+  if(!rosterModalTeamId) return;
+  const ok = await removeTeamPlayer(rosterModalTeamId, uid);
+  if(!ok){ toast('Could not remove — try again'); return; }
+  await openRosterModal(rosterModalTeamId);
+}
+
 function playFixture(fixtureId){
-  const t = currentTour(); if(!t || !isTourOwner(t)) return;
+  const t = currentTour(); if(!t) return;
   const f = allFixtures(t).find(x=>x.id === fixtureId); if(!f) return;
+  if(!canScoreFixture(t, f)) return;
   setupPrefill = {
     teamA: teamNameById(t, f.teamAId), teamB: teamNameById(t, f.teamBId),
     venue: f.venue || '', oversLimit: t.oversLimit,
@@ -4261,34 +4930,52 @@ function openFixtureDateModal(fixtureId){
     <button class="btn secondary" data-action="close">Cancel</button>`);
 }
 
+/* Tournament Organizer Control Center — Phase 4. A manager's tournament
+   never lives in the local `tournaments` array (that array is only ever
+   populated from this device's own owned rows) — it's always the fetched
+   `viewedTournamentPublic` object instead. saveTournament()'s upsert always
+   stamps the caller as user_id, which is correct for a true owner but would
+   try to rewrite ownership for a manager, so this picks the write path that
+   matches who's actually calling: the owner's normal upsert, or the
+   manager-safe plain UPDATE (see updateTournamentAsManager's comment in
+   cloud.js). Never called for tournaments locked (Phase 4) — every call
+   site below already gated the whole action on canManageTour(t), and a
+   locked tournament's server-side policy would reject either write path
+   anyway; this only decides WHICH path, not whether one is allowed. */
+async function saveTourWrite(t){
+  if(!cloudReady() || !getUser()) return;
+  if(tournaments.some(x=>x.id === t.id)) await saveTournament(t);
+  else await updateTournamentAsManager(t);
+}
+
 async function saveFixtureDate(fixtureId){
-  const t = currentTour(); if(!t || !isTourOwner(t)) return;
+  const t = currentTour(); if(!t || !canManageTour(t)) return;
   const f = allFixtures(t).find(x=>x.id === fixtureId); if(!f) return;
   const date = $('fxDate').value, time = $('fxTime').value || '00:00';
   f.date = date ? new Date(date + 'T' + time).toISOString() : null;
   f.venue = $('fxVenue').value.trim();
   t.updatedAt = Date.now();
   saveTours();
-  if(cloudReady() && getUser()) await saveTournament(t);
+  await saveTourWrite(t);
   closeModal(); render(); toast('Fixture updated');
 }
 
 async function genKnockout(){
-  const t = currentTour(); if(!t || !isTourOwner(t)) return;
+  const t = currentTour(); if(!t || !canManageTour(t)) return;
   t.knockout = generateKnockout(t);
   advanceKnockout(t);
   saveTours();
-  if(cloudReady() && getUser()) await saveTournament(t);
+  await saveTourWrite(t);
   render(); toast('Bracket generated');
 }
 
 async function regenFixtures(){
-  const t = currentTour(); if(!t || !isTourOwner(t)) return;
+  const t = currentTour(); if(!t || !canManageTour(t)) return;
   const played = t.fixtures.filter(f=>f.status === 'completed').length;
   if(played > 0){ toast('Cannot regenerate — matches already played'); return; }
   t.fixtures = generateRoundRobin(t, { legs:1 });
   saveTours();
-  if(cloudReady() && getUser()) await saveTournament(t);
+  await saveTourWrite(t);
   render(); toast('Fixtures regenerated');
 }
 
@@ -4298,6 +4985,67 @@ async function removeTournament(){
   saveTours();
   if(cloudReady() && getUser()) await deleteTournament(t.id);
   openTourId = null; go('tournaments'); toast('Tournament deleted');
+}
+
+/* ---------------- Tournament Organizer Control Center — Phase 4: emergency
+   controls (pause/resume/lock/unlock/organizer-cancel). All five go through
+   dedicated RPCs (see cloud.js/supabase.sql) rather than a plain
+   saveTournament()/saveTourWrite() write — the RPCs are what actually
+   enforce "not while locked" and "owner/manager/admin only" server-side, so
+   these don't just poke the status column directly like a normal edit
+   would. Each updates the local `t` object optimistically so the screen
+   reflects the change immediately, then persists local storage so a
+   tournament in the owned array (an actual owner's own device) doesn't
+   revert on next load — a manager's viewedTournamentPublic copy is never in
+   that array, so saveTours() is a harmless no-op for them, same as
+   elsewhere in this file. ---------------- */
+
+async function pauseTourAction(){
+  const t = currentTour(); if(!t || !canManageTour(t) || t.locked) return;
+  const ok = await setTournamentStatus(t.id, 'paused');
+  if(!ok){ toast('Could not pause — try again'); return; }
+  t.status = 'paused'; saveTours(); render(); toast('Tournament paused');
+}
+
+async function resumeTourAction(){
+  const t = currentTour(); if(!t || !canManageTour(t) || t.locked) return;
+  const ok = await setTournamentStatus(t.id, 'upcoming');
+  if(!ok){ toast('Could not resume — try again'); return; }
+  // 'upcoming' is a safe, neutral value here — deriveStatus() recomputes
+  // the real live/upcoming/completed state from fixtures/dates the moment
+  // this isn't 'paused' or 'cancelled' anymore, so this never actually
+  // shows as "Upcoming" if fixtures already say otherwise.
+  t.status = 'upcoming'; saveTours(); render(); toast('Tournament resumed');
+}
+
+async function lockTourAction(){
+  const t = currentTour(); if(!t || !canManageTour(t)) return;
+  const ok = await lockTournament(t.id);
+  if(!ok){ toast('Could not lock — try again'); return; }
+  t.locked = true; saveTours(); render(); toast('Tournament locked — editing disabled until unlocked');
+}
+
+async function unlockTourAction(){
+  const t = currentTour(); if(!t || !canManageTour(t)) return;
+  const ok = await unlockTournament(t.id);
+  if(!ok){ toast('Could not unlock — try again'); return; }
+  t.locked = false; saveTours(); render(); toast('Tournament unlocked');
+}
+
+async function cancelTourOrganizerAction(){
+  const t = currentTour(); if(!t || !canManageTour(t) || t.locked) return;
+  openModal(`<h3>Cancel this tournament?</h3>
+    <div class="stat-dim" style="margin-bottom:14px;">This marks it as cancelled for every player who can see it. This can't be easily undone from here.</div>
+    <button class="btn danger" data-action="confirm-cancel-tour-organizer">Cancel tournament</button>
+    <button class="btn secondary" data-action="close">Go back</button>`);
+}
+
+async function confirmCancelTourOrganizerAction(){
+  const t = currentTour(); if(!t || !canManageTour(t)) { closeModal(); return; }
+  const ok = await organizerCancelTournament(t.id);
+  closeModal();
+  if(!ok){ toast('Could not cancel — try again'); return; }
+  t.status = 'cancelled'; saveTours(); render(); toast('Tournament cancelled');
 }
 
 /* ---------------- export ---------------- */
@@ -4406,9 +5154,10 @@ function setupConnectivity(){
    — viewing a tournament is meant to work for guests too, same as a public
    player profile or a live match link. Only `tournaments` (creating/
    managing your own) stays gated. Every mutating action reachable from the
-   detail page is separately guarded by isTourOwner() and, underneath that,
-   by Supabase RLS — so this isn't the real security boundary, just where
-   guests stop being asked to sign in for something they're allowed to see. */
+   detail page is separately guarded by isTourOwner()/canManageTour() and,
+   underneath that, by Supabase RLS — so this isn't the real security
+   boundary, just where guests stop being asked to sign in for something
+   they're allowed to see. */
 const GATED = {
   setup:'access live scoring', live:'access live scoring', teams:'build teams',
   tournaments:'run tournaments',
@@ -4802,6 +5551,29 @@ function bind(){
     else if(a === 'gen-knockout') genKnockout();
     else if(a === 'regen-fixtures') regenFixtures();
     else if(a === 'delete-tour') removeTournament();
+    else if(a === 'pause-tour') pauseTourAction();
+    else if(a === 'resume-tour') resumeTourAction();
+    else if(a === 'lock-tour') lockTourAction();
+    else if(a === 'unlock-tour') unlockTourAction();
+    else if(a === 'cancel-tour-organizer') cancelTourOrganizerAction();
+    else if(a === 'confirm-cancel-tour-organizer') confirmCancelTourOrganizerAction();
+    else if(a === 'assign-fixture') openAssignFixtureModal(el.dataset.id);
+    else if(a === 'assign-search-players') assignSearchPlayersAction();
+    else if(a === 'assign-fixture-role') assignFixtureRoleAction(el.dataset.uid, el.dataset.role);
+    else if(a === 'unassign-fixture') unassignFixtureRoleAction(el.dataset.role);
+    else if(a === 'enable-roster') enableTeamRosterAction(el.dataset.localId, el.dataset.name);
+    else if(a === 'manage-roster') openRosterModal(el.dataset.teamId);
+    else if(a === 'roster-search-players') rosterSearchPlayersAction();
+    else if(a === 'roster-invite-player') rosterInvitePlayerAction(el.dataset.uid);
+    else if(a === 'roster-set-captain') rosterSetCaptainAction(el.dataset.uid);
+    else if(a === 'roster-remove-player') rosterRemovePlayerAction(el.dataset.uid);
+    else if(a === 'accept-team-invite') respondTeamInviteAction(el.dataset.teamId, true);
+    else if(a === 'decline-team-invite') respondTeamInviteAction(el.dataset.teamId, false);
+    else if(a === 'open-announce-tour') openAnnounceTourModal();
+    else if(a === 'send-announce-tour') sendAnnounceTourAction();
+    else if(a === 'open-report-dispute') openReportDisputeModal();
+    else if(a === 'submit-dispute') submitDisputeAction();
+    else if(a === 'resolve-dispute') resolveDisputeAction(el.dataset.id, el.dataset.status);
     else if(a === 'view-fixture'){
       const t = currentTour();
       const f = t && allFixtures(t).find(x=>x.id === el.dataset.id);
@@ -4828,6 +5600,8 @@ function bind(){
     }
     else if(a === 'admin-view-tournament') openTournamentView(el.dataset.id);
     else if(a === 'admin-cancel-tournament') adminCancelTournamentPrompt(el.dataset.id, el.dataset.name);
+    else if(a === 'admin-verify-tournament') adminVerifyTournamentAction(el.dataset.id);
+    else if(a === 'admin-unverify-tournament') adminUnverifyTournamentAction(el.dataset.id);
     else if(a === 'admin-cancel-match') adminCancelMatchPrompt(el.dataset.id, el.dataset.name);
     else if(a === 'admin-stop-live') adminStopLiveAction(el.dataset.id);
     else if(a === 'admin-suspend-organiser') adminSuspendOrganiserPrompt(el.dataset.id, el.dataset.name);
