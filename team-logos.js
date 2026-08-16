@@ -50,17 +50,30 @@ const ICONS = {
   star: `<path d="M50,20 57.6,39.5 78.5,40.7 62.4,54 67.6,74.3 50,63 32.4,74.3 37.6,54 21.5,40.7 42.4,39.5Z" fill="#fff" opacity=".95"/>`,
   flame: `<path d="M50 18c-9 15-23 24-23 41a23 23 0 0 0 46 0c0-10-6-17-10-23c-2 9-6 11-8 7-3-6 3-17-5-25z" fill="#fff" opacity=".95"/>`,
   bolt: `<path d="M57 14 27 55h18l-6 31 34-44H55z" fill="#fff" opacity=".95"/>`,
-  wing: `<path d="M12 56c22 11 46 11 70-4-6 17-28 32-53 30-11-1-19-14-17-26z" fill="#fff" opacity=".95"/>`,
-  crown: `<path d="M20 68 24 34 42 51 50 24 58 51 76 34 80 68Z" fill="#fff" opacity=".95"/>`,
+  wing: `
+    <path d="M12 56c22 11 46 11 70-4-6 17-28 32-53 30-11-1-19-14-17-26z" fill="#fff" opacity=".95"/>
+    <path d="M20 54c14-1 28-7 36-18" stroke="currentColor" stroke-width="2" fill="none" opacity=".3" stroke-linecap="round"/>`,
+  crown: `
+    <path d="M22 66 26 36 42 52 50 26 58 52 74 36 78 66Z" fill="#fff" opacity=".95"/>
+    <rect x="20" y="66" width="60" height="8" rx="2" fill="#fff" opacity=".9"/>
+    <circle cx="50" cy="26" r="4" fill="#fff" opacity=".95"/>
+    <circle cx="26" cy="36" r="3" fill="#fff" opacity=".85"/>
+    <circle cx="74" cy="36" r="3" fill="#fff" opacity=".85"/>`,
   cup: `
     <path d="M36 22h28v11c0 12-8 20-14 20s-14-8-14-20V22z" fill="#fff" opacity=".95"/>
     <path d="M36 27h-7v3c0 7 4 11 9 12M64 27h7v3c0 7-4 11-9 12" stroke="#fff" stroke-width="3" fill="none" opacity=".85" stroke-linecap="round"/>
     <rect x="45" y="52" width="10" height="11" fill="#fff" opacity=".9"/>
     <rect x="34" y="64" width="32" height="7" rx="3" fill="#fff" opacity=".95"/>`,
   wreath: `
-    <path d="M41 19C27 25 21 39 24 55c2 12 11 21 20 24" stroke="#fff" stroke-width="4" fill="none" opacity=".9" stroke-linecap="round"/>
-    <path d="M59 19c14 6 20 20 17 36-2 12-11 21-20 24" stroke="#fff" stroke-width="4" fill="none" opacity=".9" stroke-linecap="round"/>
-    <circle cx="50" cy="50" r="7" fill="#fff" opacity=".9"/>`
+    <g stroke="#fff" stroke-width="4" fill="none" opacity=".9" stroke-linecap="round">
+      <path d="M41 19C27 25 21 39 24 55c2 12 11 21 20 24"/>
+      <path d="M59 19c14 6 20 20 17 36-2 12-11 21-20 24"/>
+    </g>
+    <g stroke="#fff" stroke-width="2.2" opacity=".65" stroke-linecap="round">
+      <path d="M30 30l6 4M26 42l6 2M27 53l6-1"/>
+      <path d="M70 30l-6 4M74 42l-6 2M73 53l-6-1"/>
+    </g>
+    <circle cx="50" cy="50" r="6" fill="#fff" opacity=".9"/>`
 };
 const ICON_IDS = Object.keys(ICONS);
 
@@ -85,18 +98,31 @@ function variantFor(team){
 }
 
 /* Standalone <svg> string for a generated crest — safe to inject with
-   innerHTML, same convention as avatars.js's avatarSVG()/initialsBadge(). */
+   innerHTML, same convention as avatars.js's avatarSVG()/initialsBadge().
+   The inset inner-border and gloss highlight are drawn from the same
+   shape path, scaled/overlaid, rather than baked into each shape — one
+   real "team crest" treatment shared by all 50 variants instead of a
+   flat filled outline. */
 export function teamLogoSVG(team, size = 64){
   const { shape, icon, hue } = variantFor(team);
   const gid = 'tlg_' + shape.id + '_' + (hue|0);
-  const c1 = `hsl(${hue} 55% 40%)`, c2 = `hsl(${hue} 60% 20%)`;
+  const hgid = 'tlh_' + shape.id + '_' + (hue|0);
+  const c1 = `hsl(${hue} 58% 42%)`, c2 = `hsl(${hue} 64% 17%)`;
   const name = (team && team.name) || 'Team';
   return `<svg viewBox="0 0 100 100" width="${size}" height="${size}" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="${name} crest" color="${c2}">
-    <defs><linearGradient id="${gid}" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="${c1}"/><stop offset="1" stop-color="${c2}"/>
-    </linearGradient></defs>
-    <path d="${shape.d}" fill="url(#${gid})" stroke="rgba(255,255,255,.28)" stroke-width="2"/>
+    <defs>
+      <linearGradient id="${gid}" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0" stop-color="${c1}"/><stop offset="1" stop-color="${c2}"/>
+      </linearGradient>
+      <radialGradient id="${hgid}" cx="30%" cy="24%" r="65%">
+        <stop offset="0" stop-color="#ffffff" stop-opacity=".3"/>
+        <stop offset="60%" stop-color="#ffffff" stop-opacity="0"/>
+      </radialGradient>
+    </defs>
+    <path d="${shape.d}" fill="url(#${gid})" stroke="rgba(255,255,255,.3)" stroke-width="2"/>
+    <path d="${shape.d}" fill="none" stroke="rgba(255,255,255,.35)" stroke-width="1" transform="translate(50 50) scale(.87) translate(-50 -50)"/>
     ${ICONS[icon]}
+    <path d="${shape.d}" fill="url(#${hgid})"/>
   </svg>`;
 }
 

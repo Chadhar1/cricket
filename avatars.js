@@ -26,7 +26,8 @@ const GLYPHS = {
   helmet: `
     <path d="M50 24c-14 0-24 10-24 23v10h10V47c0-8 6-14 14-14s14 6 14 14v10h10V47c0-13-10-23-24-23z" fill="#fff" opacity=".95"/>
     <rect x="24" y="58" width="52" height="7" rx="3.5" fill="#fff" opacity=".95"/>
-    <rect x="30" y="68" width="40" height="5" rx="2.5" fill="#fff" opacity=".55"/>`,
+    <rect x="30" y="68" width="40" height="5" rx="2.5" fill="#fff" opacity=".55"/>
+    <circle cx="50" cy="35" r="3" fill="#fff" opacity=".55"/>`,
   ball: `
     <circle cx="50" cy="50" r="24" fill="#fff" opacity=".95"/>
     <path d="M34 36c8 6 8 22 0 28M66 36c-8 6-8 22 0 28" stroke="#c0392b" stroke-width="3" fill="none" stroke-linecap="round"/>
@@ -59,45 +60,62 @@ const GLYPHS = {
     <path d="M44 44v14M51 40v18" stroke="#7b4bb7" stroke-width="2.5" stroke-linecap="round"/>
     <rect x="30" y="66" width="35" height="7" rx="3.5" fill="#fff" opacity=".7"/>`,
   ground: `
-    <circle cx="50" cy="50" r="27" fill="none" stroke="#fff" stroke-width="3.5" opacity=".95"/>
-    <ellipse cx="50" cy="50" rx="8" ry="18" fill="#fff" opacity=".85"/>
-    <circle cx="50" cy="50" r="15" fill="none" stroke="#fff" stroke-width="2" opacity=".45"/>`,
+    <circle cx="50" cy="50" r="28" fill="none" stroke="#fff" stroke-width="3" opacity=".9"/>
+    <circle cx="50" cy="50" r="17" fill="none" stroke="#fff" stroke-width="1.6" opacity=".4"/>
+    <rect x="45" y="30" width="10" height="40" rx="2" fill="#fff" opacity=".88"/>
+    <rect x="41" y="28" width="18" height="3" rx="1.5" fill="#fff" opacity=".7"/>
+    <rect x="41" y="69" width="18" height="3" rx="1.5" fill="#fff" opacity=".7"/>`,
   flag: `
-    <rect x="32" y="22" width="5" height="56" rx="2.5" fill="#fff" opacity=".95"/>
-    <path d="M39 26h30l-7 11 7 11H39z" fill="#fff" opacity=".9"/>`,
+    <rect x="32" y="20" width="5" height="58" rx="2.5" fill="#fff" opacity=".95"/>
+    <circle cx="34.5" cy="20" r="3.5" fill="#fff" opacity=".95"/>
+    <path d="M39 25c9-4 18-4 27 0c-3 5-3 10 0 15c-9 4-18 4-27 0z" fill="#fff" opacity=".9"/>`,
   umpire: `
     <circle cx="50" cy="34" r="11" fill="#fff" opacity=".95"/>
     <path d="M30 76v-8c0-9 9-15 20-15s20 6 20 15v8z" fill="#fff" opacity=".95"/>
     <path d="M50 22v-6" stroke="#fff" stroke-width="3.5" stroke-linecap="round" opacity=".85"/>`,
   scoreboard: `
-    <rect x="24" y="28" width="52" height="38" rx="5" fill="#fff" opacity=".95"/>
+    <rect x="23" y="27" width="54" height="40" rx="6" fill="#fff" opacity=".95"/>
+    <rect x="23" y="27" width="54" height="40" rx="6" fill="none" stroke="#c2410c" stroke-width="2" opacity=".22"/>
     <g fill="#c2410c">
-      <rect x="30" y="35" width="18" height="7" rx="2"/>
-      <rect x="52" y="35" width="18" height="7" rx="2"/>
-      <rect x="30" y="47" width="40" height="6" rx="2" opacity=".55"/>
-      <rect x="30" y="56" width="26" height="5" rx="2" opacity=".35"/>
+      <rect x="30" y="35" width="17" height="9" rx="2"/>
+      <rect x="53" y="35" width="17" height="9" rx="2"/>
+      <rect x="30" y="48" width="40" height="6" rx="2" opacity=".6"/>
+      <rect x="30" y="57" width="26" height="5" rx="2" opacity=".4"/>
     </g>
-    <rect x="44" y="66" width="12" height="10" fill="#fff" opacity=".8"/>`,
+    <rect x="42" y="67" width="16" height="9" fill="#fff" opacity=".85"/>`,
   shield: `
-    <path d="M50 20l22 8v20c0 15-10 26-22 30-12-4-22-15-22-30V28z" fill="#fff" opacity=".95"/>
-    <path d="M50 34v30" stroke="#9b1c4b" stroke-width="3" stroke-linecap="round"/>
-    <path d="M38 46h24" stroke="#9b1c4b" stroke-width="3" stroke-linecap="round"/>`
+    <path d="M50 18l24 9v22c0 16-11 28-24 32-13-4-24-16-24-32V27z" fill="#fff" opacity=".95"/>
+    <path d="M50 18l24 9v22c0 16-11 28-24 32-13-4-24-16-24-32V27z" fill="none" stroke="#9b1c4b" stroke-width="1.5" opacity=".25"/>
+    <path d="M50 33v28M37 47h26" stroke="#9b1c4b" stroke-width="3.2" stroke-linecap="round"/>
+    <circle cx="50" cy="47" r="3.2" fill="#9b1c4b"/>`
 };
 
 export function getAvatar(id){
   return AVATARS.find(a=>a.id === id) || AVATARS.find(a=>a.id === DEFAULT_AVATAR);
 }
 
-/* Returns a standalone <svg> string. Safe to inject with innerHTML. */
+/* Returns a standalone <svg> string. Safe to inject with innerHTML.
+   The gloss highlight + thin outer ring are drawn once here, shared by
+   every avatar, rather than baked into each individual glyph — a cheap way
+   to give the whole bundled set a consistent "badge" finish instead of
+   flat filled circles. */
 export function avatarSVG(id, size = 44){
   const a = getAvatar(id);
   const gid = 'ag_' + a.id;
+  const hgid = 'agh_' + a.id;
   return `<svg viewBox="0 0 100 100" width="${size}" height="${size}" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="${a.name} avatar">
-    <defs><linearGradient id="${gid}" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="${a.c1}"/><stop offset="1" stop-color="${a.c2}"/>
-    </linearGradient></defs>
-    <circle cx="50" cy="50" r="50" fill="url(#${gid})"/>
+    <defs>
+      <linearGradient id="${gid}" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0" stop-color="${a.c1}"/><stop offset="1" stop-color="${a.c2}"/>
+      </linearGradient>
+      <radialGradient id="${hgid}" cx="32%" cy="26%" r="60%">
+        <stop offset="0" stop-color="#ffffff" stop-opacity=".28"/>
+        <stop offset="65%" stop-color="#ffffff" stop-opacity="0"/>
+      </radialGradient>
+    </defs>
+    <circle cx="50" cy="50" r="49" fill="url(#${gid})" stroke="rgba(255,255,255,.16)" stroke-width="1.5"/>
     ${GLYPHS[a.id] || ''}
+    <circle cx="50" cy="50" r="49" fill="url(#${hgid})"/>
   </svg>`;
 }
 
