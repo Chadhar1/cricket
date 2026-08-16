@@ -3446,18 +3446,28 @@ function rmPickTemplate(id){
 }
 
 async function rmContinueToCamera(){
-  RM.audioEnabled = $('rmAudioToggle') ? $('rmAudioToggle').checked : RM.audioEnabled;
-  toast('Starting camera…');
-  const result = await recorder.openCameraPreview({ audio: RM.audioEnabled });
-  if(result.error){ toast(result.error); return; }
-  RM.capabilities = result.capabilities;
-  RM.qualityOptions = recorder.availableQualityOptions(result.capabilities);
-  RM.quality = RM.qualityOptions[0];
   try{
-    const devices = await navigator.mediaDevices.enumerateDevices();
-    RM.multiCamera = devices.filter(d=>d.kind === 'videoinput').length > 1;
-  }catch(e){ RM.multiCamera = false; }
-  renderRecordCameraReady();
+    RM.audioEnabled = $('rmAudioToggle') ? $('rmAudioToggle').checked : RM.audioEnabled;
+    toast('Starting camera…');
+    const result = await recorder.openCameraPreview({ audio: RM.audioEnabled });
+    if(result.error){ toast(result.error); return; }
+    RM.capabilities = result.capabilities;
+    RM.qualityOptions = recorder.availableQualityOptions(result.capabilities);
+    RM.quality = RM.qualityOptions[0];
+    try{
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      RM.multiCamera = devices.filter(d=>d.kind === 'videoinput').length > 1;
+    }catch(e){ RM.multiCamera = false; }
+    renderRecordCameraReady();
+  }catch(err){
+    // Belt-and-braces: any unexpected failure (a rejected promise this
+    // function didn't already handle, a browser API throwing instead of
+    // rejecting, etc.) surfaces as a visible toast instead of silently
+    // doing nothing — which is exactly what made this hard to diagnose
+    // the first time around.
+    console.error('rmContinueToCamera failed:', err);
+    toast('Could not open the camera: ' + (err && err.message ? err.message : String(err)));
+  }
 }
 
 function renderRecordCameraReady(){
