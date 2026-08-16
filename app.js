@@ -18,11 +18,15 @@ import {
 import {
   createTournament, generateRoundRobin, resultFromMatch, applyResult,
   computeStandings, leagueComplete, generateKnockout, advanceKnockout,
-  tournamentChampion, teamNameById, allFixtures, formatNRR, newFixture,
+  tournamentChampion, teamNameById, teamById, allFixtures, formatNRR, newFixture,
   STATUSES, deriveStatus, POINTS
 } from './tournament.js';
 
 import { AVATARS, DEFAULT_AVATAR, avatarSVG, initialsBadge, brandMark, brandLockup } from './avatars.js';
+import { resolveTeamLogoMarkup, loadTeamLogoImage } from './team-logos.js';
+import { reportBallEvents, reportMatchComplete } from './broadcast-events.js';
+import { TEMPLATES, buildOverlayState, templateThumbnailSVG } from './overlays.js';
+import * as recorder from './recorder.js';
 
 import {
   buildCareers, topRunScorers, topWicketTakers, bestAverages, bestEconomy,
@@ -104,7 +108,7 @@ let historyViewId = null;
 let undoStack = [];
 let teams = [], tournaments = [], events = [], cloudMatches = [];
 let profile = { displayName:'', avatarId:DEFAULT_AVATAR };
-let editingTeamId = null, teamFormRoster = [];
+let editingTeamId = null, teamFormRoster = [], teamFormLogo = null;
 let pendingExtra = null;
 let authMode = 'signin';
 let authGateReason = null;   // e.g. "access live scoring" — why render() bounced here
@@ -742,6 +746,69 @@ function readPhotoFile(file){
     };
     reader.readAsDataURL(file);
   });
+}
+
+/* Same centre-crop-and-compress pipeline as readPhotoFile(), reused for
+   team logo uploads (see team-logos.js's resolveTeamLogoMarkup(), which
+   prefers this over the generated crest once a team has one). Kept as its
+   own function rather than a shared parameterised one so this diff stays
+   easy to review — the two are free to diverge later (e.g. a non-square
+   crop for logos) without touching the profile-photo path. */
+function readTeamLogoFile(file){
+  return new Promise((resolve, reject)=>{
+    if(!file) return reject(new Error('No file chosen.'));
+    if(!/^image\//.test(file.type)) return reject(new Error('That is not an image.'));
+    if(file.size > 12 * 1024 * 1024) return reject(new Error('Image is too large (max 12 MB).'));
+
+    const reader = new FileReader();
+    reader.onerror = ()=>reject(new Error('Could not read that file.'));
+    reader.onload = ()=>{
+      const img = new Image();
+      img.onerror = ()=>reject(new Error('Could not open that image.'));
+      img.onload = ()=>{
+        try{
+          const side = Math.min(img.width, img.height);
+          const sx = (img.width - side) / 2;
+          const sy = (img.height - side) / 2;
+          const cv = document.createElement('canvas');
+          cv.width = cv.height = PHOTO_PX;
+          const ctx = cv.getContext('2d');
+          ctx.imageSmoothingQuality = 'high';
+          ctx.drawImage(img, sx, sy, side, side, 0, 0, PHOTO_PX, PHOTO_PX);
+
+          let q = 0.82, out = cv.toDataURL('image/jpeg', q);
+          while(out.length * 0.75 > PHOTO_MAX_BYTES && q > 0.4){
+            q -= 0.12;
+            out = cv.toDataURL('image/jpeg', q);
+          }
+          if(out.length * 0.75 > PHOTO_MAX_BYTES){
+            return reject(new Error('Could not compress that image enough. Try a smaller one.'));
+          }
+          resolve(out);
+        }catch(err){ reject(new Error('Could not process that image.')); }
+      };
+      img.src = reader.result;
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
+async function handleTeamLogoPick(file){
+  try{
+    toast('Processing logo…');
+    teamFormLogo = await readTeamLogoFile(file);
+    renderTeamLogoPreview();
+    toast('Logo updated — Save Team to keep it');
+  }catch(err){
+    toast(err.message || 'Could not use that image');
+  }
+}
+
+function renderTeamLogoPreview(){
+  const el = $('teamFormLogoPreview');
+  if(!el) return;
+  const name = ($('teamFormName') && $('teamFormName').value.trim()) || 'Team';
+  el.innerHTML = resolveTeamLogoMarkup({ id: editingTeamId || 'preview', name, logo: teamFormLogo }, 56);
 }
 
 /* Photo wins over the chosen icon wherever an avatar is shown. */
@@ -3156,7 +3223,35 @@ function snapshot(){
   undoStack.push(JSON.stringify(match));
   if(undoStack.length > 250) undoStack.shift();
 }
-function afterBall(res){
+/* Grabs a reference (not a copy) to whoever is on strike right now, plus
+   their current run total, right before a ball is scored. engine.js
+   mutates the batter object in place, so after playBall() runs,
+   snap.ref.runs is automatically the post-ball total for the exact same
+   batter who faced the ball — even if that ball got them out, and even
+   though inn.strikerIdx itself may have moved on to a new batter by then.
+   Used only to report FOUR/SIX/WICKET/FIFTY/CENTURY to the broadcast
+   overlay (broadcast-events.js) — scoring itself does not depend on this. */
+function snapshotStriker(m){
+  const inn = curInnings(m);
+  const ref = inn.batters[inn.strikerIdx];
+  const nonRef = inn.batters[inn.nonStrikerIdx];
+  return { ref, name: ref.name, runsBefore: ref.runs, nonStrikerName: nonRef ? nonRef.name : null };
+}
+function afterBall(res, ball, strikerSnap){
+  if(ball && strikerSnap){
+    // Who actually got dismissed isn't always whoever faced the ball — a
+    // run out can end the non-striker's innings instead. Both names are
+    // captured *before* playBall() ran so this is right even though
+    // strikerIdx/nonStrikerIdx may have moved on to a new batter by now.
+    const dismissedName = ball.whoOut === 'nonstriker' ? strikerSnap.nonStrikerName : strikerSnap.name;
+    reportBallEvents({
+      ball, res,
+      strikerName: strikerSnap.name,
+      strikerRunsBefore: strikerSnap.runsBefore,
+      strikerRunsAfter: strikerSnap.ref.runs,
+      dismissedName
+    });
+  }
   persistMatch();
   if(res.inningsOver){ handleInningsEnd(); return; }
   if(res.overJustEnded){ openNewBowlerModal(); return; }
@@ -3188,7 +3283,9 @@ function matchLocked(m){ return !m || m.completed || m.cancelled; }
 function doRun(n){
   if(matchLocked(match) || !ballLock()) return;
   snapshot();
-  afterBall(playBall(match, { extra:null, batRuns:n, isWicket:false }));
+  const ball = { extra:null, batRuns:n, isWicket:false };
+  const strikerSnap = snapshotStriker(match);
+  afterBall(playBall(match, ball), ball, strikerSnap);
 }
 function undo(){
   if(!undoStack.length){ toast('Nothing to undo'); return; }
@@ -3206,6 +3303,7 @@ async function handleInningsEnd(){
   if(stage === 'break'){ openSecondInningsModal(); return; }
 
   finishMatch(match);
+  reportMatchComplete(match);
   pushHistory(match);
   await linkResultToTournament(match);
   if(match.eventId){
@@ -3252,6 +3350,322 @@ async function linkResultToTournament(m){
 /* ---------------- MODALS ---------------- */
 function closeModal(){ $('modalRoot').innerHTML = ''; }
 function openModal(html){ $('modalRoot').innerHTML = `<div class="modal-overlay"><div class="modal">${html}</div></div>`; }
+
+/* ===========================================================================
+   RECORD MATCH — local-only recording with a burned-in broadcast overlay.
+
+   Architecture: this block is UI glue only. The actual work happens in
+   overlays.js (draws the score bug + event animations onto a canvas) and
+   recorder.js (owns the camera + MediaRecorder + the composite loop that
+   merges camera pixels and overlay pixels into one frame). Nothing here —
+   or in either of those files — ever calls a Supabase upload; the file
+   only leaves this device if the organizer explicitly taps Save or Share
+   on the summary screen. See RECORDING_OVERLAY_FEASIBILITY_PROPOSAL.md for
+   the full design and the agreed trade-offs (WebM output, not MP4;
+   Android/Chrome-first; generated team crests with upload override).
+   =========================================================================== */
+let RM = null;          // recording-modal state; only exists while the modal is open
+let rmUnsubTick = null;
+let rmUnsubErr = null;
+
+function rmFmtDuration(ms){
+  const s = Math.max(0, Math.floor(ms / 1000));
+  const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;
+  const mm = String(m).padStart(2, '0'), ss = String(sec).padStart(2, '0');
+  return h > 0 ? `${h}:${mm}:${ss}` : `${mm}:${ss}`;
+}
+function rmFmtBytes(n){
+  if(n < 1024) return n + ' B';
+  if(n < 1024 * 1024) return (n / 1024).toFixed(0) + ' KB';
+  return (n / (1024 * 1024)).toFixed(1) + ' MB';
+}
+
+/* Best-effort match between the live match's team names and something
+   that might actually carry a logo: a tournament team entry (if this
+   match came from a fixture) or a locally-saved Team. Falls back to a
+   plain {name} object, which still gets a deterministic generated crest
+   from team-logos.js — there is always something sensible to draw. */
+function rmResolveTeams(){
+  const tour = match && match.tournamentId ? tournaments.find(t=>t.id === match.tournamentId) : null;
+  const findLocal = (name)=>teams.find(t=>t.name === name);
+  const teamAObj = (tour && match.teamAId && teamById(tour, match.teamAId)) || findLocal(match.teamA) || { name: match.teamA };
+  const teamBObj = (tour && match.teamBId && teamById(tour, match.teamBId)) || findLocal(match.teamB) || { name: match.teamB };
+  return { tour, teamAObj, teamBObj };
+}
+
+function openRecordModal(){
+  if(!match || matchLocked(match)){ toast('Start or resume a live match first'); return; }
+  if(!recorder.isCameraSupported()){
+    openModal(`<h3>🎥 Record Match</h3>
+      <div class="stat-dim" style="margin-top:8px;">This browser doesn't support camera recording (it needs getUserMedia + MediaRecorder) — try the latest Chrome on Android.</div>
+      <button class="btn secondary" data-action="close" style="margin-top:16px;">Close</button>`);
+    return;
+  }
+  RM = { templateId:'classic', audioEnabled:true, capabilities:null, qualityOptions:[], quality:null, multiCamera:false, summary:null, objectUrl:null };
+  renderRecordSetup();
+}
+
+async function renderRecordSetup(){
+  const storage = await recorder.getStorageEstimate();
+  const low = storage.supported && storage.estimatedMinutes < recorder.LOW_STORAGE_MINUTES_WARNING;
+  const activeT = TEMPLATES.find(t=>t.id === RM.templateId) || TEMPLATES[0];
+  openModal(`
+    <h3>🎥 Record Match</h3>
+    <div class="stat-dim" style="margin-bottom:12px;">Records with your camera and saves straight to this device. Nothing is uploaded or streamed — the scoreboard is burned into the saved video itself, not a floating on-screen layer.</div>
+    ${storage.supported ? `<div class="stat-dim" style="margin-bottom:12px;${low ? 'color:var(--live);' : ''}">${low ? '⚠ Low storage — roughly' : 'Estimated capacity: about'} ${Math.max(0, Math.round(storage.estimatedMinutes))} min of recording left on this device.</div>` : ''}
+    <label>Broadcast template</label>
+    <div id="rmTemplateGrid" class="chip-row" style="flex-wrap:wrap;gap:10px;margin-bottom:10px;">
+      ${TEMPLATES.map(t=>`
+        <div class="chip${t.id === RM.templateId ? ' sel' : ''}" data-action="rm-pick-template" data-id="${t.id}" style="display:flex;flex-direction:column;align-items:center;gap:6px;padding:8px;cursor:pointer;">
+          ${templateThumbnailSVG(t.id, 110)}
+          <b style="font-size:12px;">${esc(t.name)}</b>
+        </div>`).join('')}
+    </div>
+    <div class="stat-dim" id="rmTemplateBlurb" style="margin-bottom:14px;">${esc(activeT.blurb)}</div>
+    <label style="display:flex;align-items:center;gap:8px;cursor:pointer;">
+      <input type="checkbox" id="rmAudioToggle" ${RM.audioEnabled ? 'checked' : ''}> Record microphone audio
+    </label>
+    <div class="action-row" style="margin-top:16px;">
+      <button class="btn" data-action="rm-continue-to-camera">Continue &rsaquo;</button>
+      <button class="btn secondary" data-action="rm-close">Cancel</button>
+    </div>
+  `);
+}
+
+function rmPickTemplate(id){
+  RM.templateId = id;
+  if(recorder.isRecording()){
+    recorder.setActiveTemplate(id); // live switch — safe mid-recording, see overlays.js
+  }
+  const grid = $('rmTemplateGrid');
+  if(grid){
+    grid.querySelectorAll('[data-action="rm-pick-template"]').forEach(el=>el.classList.toggle('sel', el.dataset.id === id));
+    const blurb = $('rmTemplateBlurb');
+    if(blurb) blurb.textContent = (TEMPLATES.find(t=>t.id === id) || TEMPLATES[0]).blurb;
+  }
+}
+
+async function rmContinueToCamera(){
+  RM.audioEnabled = $('rmAudioToggle') ? $('rmAudioToggle').checked : RM.audioEnabled;
+  toast('Starting camera…');
+  const result = await recorder.openCameraPreview({ audio: RM.audioEnabled });
+  if(result.error){ toast(result.error); return; }
+  RM.capabilities = result.capabilities;
+  RM.qualityOptions = recorder.availableQualityOptions(result.capabilities);
+  RM.quality = RM.qualityOptions[0];
+  try{
+    const devices = await navigator.mediaDevices.enumerateDevices();
+    RM.multiCamera = devices.filter(d=>d.kind === 'videoinput').length > 1;
+  }catch(e){ RM.multiCamera = false; }
+  renderRecordCameraReady();
+}
+
+function renderRecordCameraReady(){
+  openModal(`
+    <h3>🎥 Record Match</h3>
+    <div id="rmPreviewMount" style="width:100%;aspect-ratio:16/9;background:#000;border-radius:10px;overflow:hidden;margin-bottom:12px;"></div>
+    <label>Quality</label>
+    <div class="chip-row" style="flex-wrap:wrap;gap:8px;margin-bottom:14px;">
+      ${RM.qualityOptions.map(q=>`<div class="chip${q.id === RM.quality.id ? ' sel' : ''}" data-action="rm-pick-quality" data-id="${q.id}">${esc(q.label)}</div>`).join('')}
+    </div>
+    ${RM.qualityOptions.length <= 1 ? `<div class="stat-dim" style="margin-bottom:10px;">This device only reported one supported quality — showing that.</div>` : ''}
+    <div class="action-row">
+      ${RM.multiCamera ? `<button class="btn secondary small" data-action="rm-switch-camera">Switch Camera</button>` : ''}
+      <button class="btn secondary small" data-action="rm-toggle-audio">${RM.audioEnabled ? 'Mute mic' : 'Unmute mic'}</button>
+    </div>
+    <div class="action-row" style="margin-top:14px;">
+      <button class="btn" data-action="rm-start-recording">&#9679; Start Recording</button>
+      <button class="btn secondary" data-action="rm-back-to-setup">Back</button>
+    </div>
+  `);
+  recorder.mountPreview($('rmPreviewMount'));
+}
+
+function rmPickQuality(id){
+  const q = RM.qualityOptions.find(o=>o.id === id);
+  if(q) RM.quality = q;
+  document.querySelectorAll('[data-action="rm-pick-quality"]').forEach(el=>el.classList.toggle('sel', el.dataset.id === id));
+}
+
+async function rmSwitchCamera(){
+  toast('Switching camera…');
+  const result = await recorder.switchCamera();
+  if(result && result.error){ toast(result.error); return; }
+  recorder.mountPreview($('rmPreviewMount'));
+}
+
+function rmToggleAudio(){
+  // Mutes/unmutes the already-captured mic track in place — this works
+  // the same whether called before or during a recording. If audio was
+  // turned off back on the setup screen, no mic track was ever requested,
+  // so there's genuinely nothing to toggle here.
+  if(!recorder.hasMicTrack()){ toast('Microphone audio was turned off before the camera started — go Back to change it.'); return; }
+  RM.audioEnabled = !RM.audioEnabled;
+  recorder.setMicEnabled(RM.audioEnabled);
+  document.querySelectorAll('[data-action="rm-toggle-audio"]').forEach(btn=>{
+    btn.textContent = RM.audioEnabled ? 'Mute mic' : 'Unmute mic';
+  });
+}
+
+function rmBackToSetup(){
+  recorder.stopCameraPreview();
+  renderRecordSetup();
+}
+
+function rmStartRecording(){
+  const { tour, teamAObj, teamBObj } = rmResolveTeams();
+  Promise.all([
+    loadTeamLogoImage(teamAObj, 128),
+    loadTeamLogoImage(teamBObj, 128)
+  ]).then(([teamALogoImg, teamBLogoImg])=>{
+    const getOverlayState = ()=>buildOverlayState(match, {
+      tournamentName: tour ? tour.name : null,
+      teamALogoImg, teamBLogoImg
+    });
+    try{
+      recorder.startRecording({
+        templateId: RM.templateId, getOverlayState,
+        width: RM.quality.width, height: RM.quality.height, fps: RM.quality.fps
+      });
+    }catch(err){
+      toast('Could not start recording: ' + (err && err.message ? err.message : String(err)));
+      return;
+    }
+    renderRecordingControls();
+  });
+}
+
+function renderRecordingControls(){
+  if(rmUnsubTick) rmUnsubTick();
+  if(rmUnsubErr) rmUnsubErr();
+  openModal(`
+    <h3><span style="color:var(--live);">&#9679;</span> Recording…</h3>
+    <div id="rmPreviewMount" style="width:100%;aspect-ratio:16/9;background:#000;border-radius:10px;overflow:hidden;margin-bottom:12px;"></div>
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+      <b id="rmTimer" style="font-size:20px;">00:00</b>
+      <span class="stat-dim">${esc(RM.quality.label)}</span>
+    </div>
+    <label>Broadcast template <span class="stat-dim">(switch anytime — safe mid-recording)</span></label>
+    <div id="rmTemplateGrid" class="chip-row" style="flex-wrap:wrap;gap:8px;margin-bottom:14px;">
+      ${TEMPLATES.map(t=>`<div class="chip${t.id === RM.templateId ? ' sel' : ''}" data-action="rm-pick-template" data-id="${t.id}" style="padding:6px 10px;cursor:pointer;">${esc(t.name)}</div>`).join('')}
+    </div>
+    <div class="action-row">
+      <button class="btn secondary" id="rmPauseResumeBtn" data-action="rm-pause-resume">Pause</button>
+      ${RM.multiCamera ? `<button class="btn secondary" data-action="rm-switch-camera">Switch Camera</button>` : ''}
+      ${recorder.hasMicTrack() ? `<button class="btn secondary" data-action="rm-toggle-audio">${RM.audioEnabled ? 'Mute mic' : 'Unmute mic'}</button>` : ''}
+    </div>
+    <div class="action-row" style="margin-top:12px;">
+      <button class="btn danger" data-action="rm-stop-recording">&#9632; Stop &amp; Save</button>
+    </div>
+  `);
+  recorder.mountPreview($('rmPreviewMount'));
+  rmUnsubTick = recorder.onRecorderTick((status)=>{
+    const el = $('rmTimer');
+    if(el) el.textContent = rmFmtDuration(status.elapsedMs) + (status.paused ? ' (paused)' : '');
+  });
+  rmUnsubErr = recorder.onRecorderError((msg)=>toast(msg));
+}
+
+function rmPauseResume(){
+  if(recorder.isPaused()){ recorder.resumeRecording(); }
+  else { recorder.pauseRecording(); }
+  const btn = $('rmPauseResumeBtn');
+  if(btn) btn.textContent = recorder.isPaused() ? 'Resume' : 'Pause';
+}
+
+async function rmStopRecording(){
+  toast('Finishing recording…');
+  let result;
+  try{ result = await recorder.stopRecording(); }
+  catch(err){ toast('Could not finish the recording: ' + (err && err.message ? err.message : String(err))); return; }
+  if(rmUnsubTick){ rmUnsubTick(); rmUnsubTick = null; }
+  if(rmUnsubErr){ rmUnsubErr(); rmUnsubErr = null; }
+  recorder.stopCameraPreview();
+  RM.summary = result;
+  renderRecordSummary();
+}
+
+function rmFileName(){
+  const clean = s=>String(s || 'team').replace(/[^a-z0-9]+/gi, '-').replace(/(^-|-$)/g, '').toLowerCase();
+  const ext = (RM.summary.mimeType || '').includes('mp4') ? 'mp4' : 'webm';
+  return `cricketconnect-${clean(match.teamA)}-vs-${clean(match.teamB)}-${Date.now()}.${ext}`;
+}
+
+function renderRecordSummary(){
+  const sum = RM.summary;
+  openModal(`
+    <h3>Recording saved</h3>
+    <div class="stat-dim" style="margin-bottom:14px;">This video lives only on this device — nothing was uploaded. Save it or share it now, or delete it if you don't want to keep it.</div>
+    <div class="kv-list">
+      <div class="kv-row"><div class="kv-k">Match</div><div class="kv-v">${esc(match.teamA)} vs ${esc(match.teamB)}</div></div>
+      <div class="kv-row"><div class="kv-k">Duration</div><div class="kv-v">${rmFmtDuration(sum.durationMs)}</div></div>
+      <div class="kv-row"><div class="kv-k">Quality</div><div class="kv-v">${esc(RM.quality.label)}</div></div>
+      <div class="kv-row"><div class="kv-k">Size</div><div class="kv-v">${rmFmtBytes(sum.sizeBytes)}</div></div>
+      <div class="kv-row"><div class="kv-k">Format</div><div class="kv-v">${sum.mimeType.includes('mp4') ? 'MP4' : 'WebM'} — plays in VLC, most Android/desktop players, and Chrome itself</div></div>
+    </div>
+    <div class="action-row" style="margin-top:16px;">
+      <button class="btn" data-action="rm-save-video">Save to device</button>
+      <button class="btn secondary" data-action="rm-share-video" id="rmShareBtn">Share</button>
+    </div>
+    <div class="action-row" style="margin-top:10px;">
+      <button class="btn secondary" data-action="rm-open-video">Open</button>
+      <button class="btn danger" data-action="rm-delete-video">Delete</button>
+    </div>
+  `);
+  if(!(navigator.canShare && window.File)){
+    const b = $('rmShareBtn'); if(b) b.classList.add('hidden');
+  } else {
+    try{
+      const f = new File([sum.blob], rmFileName(), { type: sum.mimeType });
+      if(!navigator.canShare({ files:[f] })){ const b = $('rmShareBtn'); if(b) b.classList.add('hidden'); }
+    }catch(e){ const b = $('rmShareBtn'); if(b) b.classList.add('hidden'); }
+  }
+}
+
+function rmSaveVideo(){
+  const sum = RM.summary;
+  const url = URL.createObjectURL(sum.blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = rmFileName();
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(()=>URL.revokeObjectURL(url), 4000);
+  toast('Saved to your device');
+}
+
+async function rmShareVideo(){
+  const sum = RM.summary;
+  try{
+    const f = new File([sum.blob], rmFileName(), { type: sum.mimeType });
+    await navigator.share({ files:[f], title:`${match.teamA} vs ${match.teamB}`, text:'Recorded with CricketConnect' });
+  }catch(err){
+    if(err && err.name !== 'AbortError') toast('Could not open the share sheet');
+  }
+}
+
+function rmOpenVideo(){
+  const url = URL.createObjectURL(RM.summary.blob);
+  window.open(url, '_blank');
+  setTimeout(()=>URL.revokeObjectURL(url), 60000);
+}
+
+function rmDeleteVideo(){
+  RM.summary = null;
+  closeModal();
+  toast('Recording deleted — nothing was ever saved or uploaded');
+  RM = null;
+}
+
+async function rmCloseGuarded(){
+  if(recorder.isRecording()){
+    toast('Stop the recording first, then Save or Delete it');
+    return;
+  }
+  if(rmUnsubTick){ rmUnsubTick(); rmUnsubTick = null; }
+  if(rmUnsubErr){ rmUnsubErr(); rmUnsubErr = null; }
+  await recorder.teardown();
+  RM = null;
+  closeModal();
+}
 
 function openExtraModal(type){
   pendingExtra = type;
@@ -3337,6 +3751,7 @@ function submitWicket(){
     newBatsmanName: newName
   };
   closeModal(); snapshot();
+  const strikerSnap = snapshotStriker(match);
   const res = playBall(match, ball);
   // Belt-and-braces: the dropdown above only ever offers legal options, so
   // this should be unreachable in normal use, but the engine is the source
@@ -3346,7 +3761,7 @@ function submitWicket(){
     toast(`Not out — ${ball.wicketType} isn't a legal dismissal off ${
       delivery === 'wd' ? 'a wide' : delivery === 'nb' ? 'a no ball' : 'a Free Hit'}`);
   }
-  afterBall(res);
+  afterBall(res, ball, strikerSnap);
 }
 
 function openNewBowlerModal(){
@@ -3831,7 +4246,7 @@ function renderTeams(){
   list.innerHTML = teams.length ? teams.map(t=>`
     <div class="hist-item">
       <div style="display:flex;align-items:center;gap:10px;min-width:0;cursor:pointer;" data-action="view-team" data-id="${esc(t.id)}">
-        ${initialsBadge(t.name, 34)}
+        ${resolveTeamLogoMarkup(t, 34)}
         <div style="min-width:0;">
           <div class="batter-name">${esc(t.name)}</div>
           <div class="d">${(t.players||[]).length} player${(t.players||[]).length===1?'':'s'}${t.captain ? ' &middot; Captain: ' + esc(t.captain) : ''}</div>
@@ -3846,6 +4261,7 @@ function renderTeams(){
   renderRoster();
 }
 function renderRoster(){
+  renderTeamLogoPreview();
   $('teamFormRoster').innerHTML = teamFormRoster.length
     ? teamFormRoster.map((p,i)=>`<span class="roster-chip">${esc(p)}<button data-action="rm-player" data-i="${i}">&times;</button></span>`).join('')
     : '<div class="stat-dim">No players added yet.</div>';
@@ -3865,7 +4281,7 @@ async function saveTeamForm(){
   const name = $('teamFormName').value.trim();
   if(!name){ toast('Enter a team name'); return; }
   const captain = $('teamFormCaptain').value || null;
-  const team = { id: editingTeamId || makeId(), name, players:[...teamFormRoster], captain, updatedAt: Date.now() };
+  const team = { id: editingTeamId || makeId(), name, players:[...teamFormRoster], captain, logo: teamFormLogo || null, updatedAt: Date.now() };
   const i = teams.findIndex(t=>t.id === team.id);
   if(i >= 0) teams[i] = team; else teams.push(team);
   saveTeams();
@@ -3873,7 +4289,7 @@ async function saveTeamForm(){
   clearTeamForm(); renderTeams(); toast('Team saved');
 }
 function clearTeamForm(){
-  editingTeamId = null; teamFormRoster = [];
+  editingTeamId = null; teamFormRoster = []; teamFormLogo = null;
   $('teamFormName').value = ''; $('teamFormPlayer').value = '';
   $('teamFormTitle').textContent = 'Add Team';
   renderRoster();
@@ -3881,7 +4297,7 @@ function clearTeamForm(){
 }
 function editTeam(id){
   const t = teams.find(x=>x.id === id); if(!t) return;
-  editingTeamId = t.id; teamFormRoster = [...(t.players||[])];
+  editingTeamId = t.id; teamFormRoster = [...(t.players||[])]; teamFormLogo = t.logo || null;
   $('teamFormName').value = t.name;
   $('teamFormTitle').textContent = 'Edit Team';
   renderRoster();
@@ -3901,7 +4317,7 @@ function openTeamDetailModal(id){
   const roster = t.players || [];
   openModal(`
     <div style="display:flex;align-items:center;gap:12px;margin-bottom:16px;">
-      ${initialsBadge(t.name, 56)}
+      ${resolveTeamLogoMarkup(t, 56)}
       <div style="min-width:0;">
         <div class="batter-name" style="font-size:17px;">${esc(t.name)}</div>
         ${t.captain ? `<div class="stat-dim">Captain: ${esc(t.captain)}</div>` : ''}
@@ -5369,6 +5785,7 @@ function bind(){
 
   // live
   $('liveHomeBtn').addEventListener('click', ()=>go('home'));
+  $('recordMatchBtn').addEventListener('click', openRecordModal);
   document.querySelectorAll('.run-btn').forEach(b=>
     b.addEventListener('click', ()=>doRun(parseInt(b.dataset.run,10))));
   document.querySelectorAll('.extra-btn').forEach(b=>
@@ -5518,6 +5935,17 @@ function bind(){
     if(f) handlePhotoPick(f);
     e.target.value = '';
   });
+  // team logo (Team screen) — same upload pattern as the profile photo above
+  $('teamLogoUploadBtn').addEventListener('click', ()=>$('teamLogoInput').click());
+  $('teamLogoResetBtn').addEventListener('click', ()=>{
+    teamFormLogo = null; renderTeamLogoPreview(); toast('Reset to generated crest — Save Team to keep it');
+  });
+  $('teamLogoInput').addEventListener('change', (e)=>{
+    const f = e.target.files && e.target.files[0];
+    if(f) handleTeamLogoPick(f);
+    e.target.value = '';
+  });
+  $('teamFormName').addEventListener('input', renderTeamLogoPreview);
   // Export-as-JSON is intentionally no longer exposed to normal users — the
   // exportData() function still exists elsewhere in this file in case it's
   // useful for a future admin/dev tool, it's just not wired to any button.
@@ -5576,9 +6004,26 @@ function bind(){
     else if(a === 'extra-run'){
       if(matchLocked(match) || !ballLock()) return;
       const n = parseInt(el.dataset.n,10); const type = pendingExtra; pendingExtra = null;
-      closeModal(); snapshot(); afterBall(playBall(match, { extra:type, batRuns:n, isWicket:false }));
+      closeModal(); snapshot();
+      const ball = { extra:type, batRuns:n, isWicket:false };
+      const strikerSnap = snapshotStriker(match);
+      afterBall(playBall(match, ball), ball, strikerSnap);
     }
     else if(a === 'confirm-wicket') submitWicket();
+    else if(a === 'rm-pick-template') rmPickTemplate(el.dataset.id);
+    else if(a === 'rm-continue-to-camera') rmContinueToCamera();
+    else if(a === 'rm-pick-quality') rmPickQuality(el.dataset.id);
+    else if(a === 'rm-switch-camera') rmSwitchCamera();
+    else if(a === 'rm-toggle-audio') rmToggleAudio();
+    else if(a === 'rm-back-to-setup') rmBackToSetup();
+    else if(a === 'rm-start-recording') rmStartRecording();
+    else if(a === 'rm-pause-resume') rmPauseResume();
+    else if(a === 'rm-stop-recording') rmStopRecording();
+    else if(a === 'rm-save-video') rmSaveVideo();
+    else if(a === 'rm-share-video') rmShareVideo();
+    else if(a === 'rm-open-video') rmOpenVideo();
+    else if(a === 'rm-delete-video') rmDeleteVideo();
+    else if(a === 'rm-close') rmCloseGuarded();
     else if(a === 'confirm-bowler') submitNewBowler();
     else if(a === 'confirm-innings2') submitSecondInnings();
     else if(a === 'confirm-end-innings'){ closeModal(); handleInningsEnd(); }

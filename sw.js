@@ -5,7 +5,7 @@
 
    After you deploy a change, bump VERSION so phones fetch the new files. */
 
-const VERSION = 'v21';
+const VERSION = 'v22';
 const CACHE = 'cricket-connect-' + VERSION;
 
 const SHELL = [
@@ -20,6 +20,10 @@ const SHELL = [
   './avatars.js',
   './stats.js',
   './social.js',
+  './team-logos.js',
+  './broadcast-events.js',
+  './overlays.js',
+  './recorder.js',
   './privacy.html',
   './supabase-config.js',
   './firebase-messaging-config.js',

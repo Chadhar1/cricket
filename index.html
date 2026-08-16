@@ -448,6 +448,7 @@
       </span>
     </div>
     <div class="topbar-actions">
+      <button class="icon-btn" id="recordMatchBtn">🎥 Record Match</button>
       <button class="icon-btn" id="liveHomeBtn">Home</button>
     </div>
   </div>
@@ -583,6 +584,15 @@
   </div>
   <div class="card">
     <h2 id="teamFormTitle">Add Team</h2>
+    <label>Team logo</label>
+    <div style="display:flex;align-items:center;gap:12px;margin-bottom:10px;">
+      <div id="teamFormLogoPreview" style="flex-shrink:0;"></div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;">
+        <button class="icon-btn" id="teamLogoUploadBtn" type="button">Upload logo</button>
+        <button class="icon-btn" id="teamLogoResetBtn" type="button">Use generated crest</button>
+      </div>
+    </div>
+    <input type="file" id="teamLogoInput" accept="image/*" class="hidden">
     <label>Team name</label>
     <input type="text" id="teamFormName" placeholder="e.g. Lahore Lions" maxlength="24" autocomplete="off">
     <label>Add player</label>
