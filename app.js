@@ -6142,6 +6142,21 @@ function readOAuthErrorFromUrl(){
   if(!errorCode) return null;
   return { errorCode, errorDesc: hash.get('error_description') || query.get('error_description') || '' };
 }
+/* True if this page load's URL has the shape Supabase leaves after an OAuth
+   provider redirects back — an access_token (implicit flow) in the hash, or
+   a code (PKCE flow) in either the hash or the query string — regardless of
+   whether it also carries an error. Used to catch a silent failure mode
+   readOAuthErrorFromUrl() can't see: Supabase declines to hand back a
+   session (wrong redirect URL not on the project's allow-list, provider
+   misconfigured, etc.) WITHOUT appending any error param at all, so the
+   page just reloads logged out with nothing to explain why. Without this,
+   that looks indistinguishable from the user simply never having tried to
+   sign in. */
+function looksLikeOAuthReturn(){
+  const hash = location.hash || '';
+  const query = location.search || '';
+  return /(^|[#&])(code|access_token)=/.test(hash) || /(^|[&?])code=/.test(query);
+}
 /* Handles both Google's OAuth error redirect AND a password-reset/magic
    link's error redirect — Supabase puts both in the exact same
    #error=...&error_code=...&error_description=... shape, so one function
@@ -6162,6 +6177,7 @@ function googleErrorText({ errorCode, errorDesc }){
 
 async function boot(){
   const oauthError = readOAuthErrorFromUrl();
+  const oauthReturn = looksLikeOAuthReturn();
 
   teams = load(K.teams, []);
   tournaments = load(K.tours, []);
@@ -6285,6 +6301,14 @@ async function boot(){
   if(oauthError && !getUser()){
     screen = 'auth';
     authMsg(googleErrorText(oauthError));
+  } else if(oauthReturn && !getUser()){
+    // Landed back from Google (or any OAuth provider) with no error param
+    // AND no session — Supabase silently declined to complete sign-in.
+    // The most common cause is this exact URL not being on the Supabase
+    // project's Redirect URLs allow-list (Authentication -> URL
+    // Configuration), which otherwise fails with zero visible feedback.
+    screen = 'auth';
+    authMsg('Sign-in didn’t complete. This usually means the app’s web address isn’t on the sign-in provider’s allow-list yet — a one-time configuration fix, not something wrong on your end. Try again, and if it keeps happening, this needs to be checked in the project settings.');
   } else {
     screen = (deep && allowed.includes(deep)) ? deep : 'home';
   }
