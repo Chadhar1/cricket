@@ -79,7 +79,16 @@ export function createMatch(opts){
     striker, nonStriker, bowler, liveShare = false,
     tournamentId = null, fixtureId = null,
     teamAId = null, teamBId = null,
-    venue = '', eventId = null
+    venue = '', eventId = null,
+    // Ground Location Foundation — optional structured link alongside the
+    // free-text `venue` above, which stays exactly as every existing screen
+    // already reads it. null for any match that didn't go through the
+    // ground picker (i.e. every match created before this, and any match
+    // where the scorer just typed a venue name instead). Not queried from a
+    // real column the way tournamentId/fixtureId sometimes are — see
+    // supabase_ground_location_migration.sql's matches_ground_id_expr_idx
+    // for how this is still searchable inside `data`.
+    groundId = null
   } = opts;
   return {
     id: makeId(),
@@ -93,7 +102,7 @@ export function createMatch(opts){
     liveShare: !!liveShare,
     // links back to a tournament fixture / scheduled event, when started from one
     tournamentId, fixtureId, teamAId, teamBId, eventId,
-    venue,
+    venue, groundId,
     toss: opts.toss || null,          // { winner:'A'|'B', decision:'bat'|'bowl' }
     isSuperOver: !!opts.isSuperOver,
     parentMatchId: opts.parentMatchId || null,

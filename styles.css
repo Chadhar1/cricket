@@ -1344,3 +1344,21 @@ button:focus-visible, input:focus-visible, select:focus-visible, .chip:focus-vis
 .gate p{margin:0 0 18px; font-size:13.5px; color:var(--ink-dim); line-height:1.65; max-width:320px;
   margin-left:auto; margin-right:auto;}
 .gate .btn{max-width:260px; margin-left:auto; margin-right:auto;}
+
+/* ---- Cricket Near You / Leaflet map (Nearby Grounds & Maps phase) ----
+   Leaflet's own CSS (loaded lazily from CDN, see ensureLeafletLoaded() in
+   app.js) supplies all the real map/pane/control positioning rules — this
+   is only the small bit of re-theming needed to match the rest of the app's
+   dark navy surface instead of Leaflet's default light popup chrome, plus
+   resetting the default .leaflet-div-icon box so divIcon markers render as
+   bare emoji instead of a bordered square. */
+#nearbyMapEl{ background:var(--bg-1); }
+.ground-marker-icon, .you-marker-icon{
+  font-size:22px; line-height:26px; text-align:center;
+  filter:drop-shadow(0 1px 2px rgba(0,0,0,.5));
+  background:none; border:none;
+}
+.leaflet-popup-content-wrapper{ background:var(--bg-2); color:var(--ink); border-radius:10px; }
+.leaflet-popup-content{ margin:10px 12px; }
+.leaflet-popup-tip{ background:var(--bg-2); }
+.leaflet-popup-content a{ color:var(--acc-2); }

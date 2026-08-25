@@ -392,6 +392,11 @@ function tournamentColumns(t){
     name: t.name || '',
     location: t.location || '',
     ground: t.ground || '',
+    // Structured link to grounds, alongside the free-text `ground` column
+    // above — that stays exactly as every existing read site already uses
+    // it. ground_id is additive: null for any tournament that hasn't picked
+    // a real ground yet (i.e. every tournament that already exists).
+    ground_id: t.groundId || null,
     start_date: t.startDate || null,
     end_date: t.endDate || null,
     description: t.description || '',
@@ -1194,6 +1199,13 @@ async function writeLive(m){
     // prompt needed, and it stays consistent with how profiles.location is
     // deliberately free text rather than a fixed region lookup.
     location: m.venue || null,
+    // Local Cricket Discovery phase — this was the actual bug blocking "Live
+    // Near You": live_matches.ground_id has existed as a column since the
+    // Ground Location Foundation phase, but nothing ever wrote to it. Every
+    // live match's ground_id was silently NULL, so any "live matches at this
+    // ground" query could never find one. m.groundId already flows correctly
+    // through createMatch() (engine.js) — this was the one missing link.
+    ground_id: m.groundId || null,
     updated_at: new Date().toISOString()
   });
   if(error){ console.error('live write failed:', error); return false; }
@@ -1671,6 +1683,440 @@ export async function notifyMatchCompleted(match, { audienceType, audienceFilter
     await sendNotificationNow(created.id);
     return true;
   }catch(err){ console.error('notifyMatchCompleted failed:', err); return false; }
+}
+
+/* ===========================================================================
+   GROUNDS — Ground Location Foundation.
+
+   `grounds` is a public table (RLS: anyone reads an active row; any signed-in
+   user can create one; only the creator or an admin can update one, and
+   `verified`/`active` are locked out of the creator's own write — see
+   supabase_ground_location_migration.sql for the exact policies). Unlike
+   matches/teams/tournaments/events, this is NOT a `saveRowIn('grounds', ...)`
+   owner-scoped JSONB row — it has real, individually typed columns from the
+   start, because it needs to be searchable/filterable by name/city/country
+   for every visitor, not just its own creator.
+
+   normalized_name is a generated column (see migration) — never sent from
+   here, Postgres computes it from `name`. normalizeGroundName() below is only
+   for normalizing a *search term* client-side the same way, so comparisons
+   line up.
+   =========================================================================== */
+
+function normalizeGroundName(name){
+  return String(name || '').trim().replace(/\s+/g, ' ').toLowerCase();
+}
+
+/* PostgREST's .or() takes a raw filter-grammar string, not a parameterized
+   value — comma/parens/percent are syntax there (AND/OR grouping, ILIKE
+   wildcard), not literal search characters. Grounds search is reachable by
+   signed-out visitors, so a search box is untrusted input reaching this
+   string. Stripping just those three characters (not a Latin-only allowlist)
+   keeps every language's ground names searchable while removing the only
+   characters that could reshape the filter. */
+function sanitizeSearchTerm(s){
+  return String(s || '').replace(/[,()%]/g, '').trim();
+}
+
+function toAppGround(row){
+  if(!row) return null;
+  return {
+    id: row.id, name: row.name, normalizedName: row.normalized_name,
+    latitude: row.latitude, longitude: row.longitude,
+    address: row.address || '', city: row.city || '', region: row.region || '',
+    country: row.country || '', countryCode: row.country_code || null,
+    postalCode: row.postal_code || null, timezone: row.timezone || null,
+    placeId: row.place_id || null, imageUrl: row.image_url || null,
+    createdBy: row.created_by, verified: !!row.verified, active: row.active !== false,
+    createdAt: row.created_at, updatedAt: row.updated_at
+  };
+}
+
+const GROUND_COLUMNS = 'id, name, normalized_name, latitude, longitude, address, city, region, country, country_code, postal_code, timezone, place_id, image_url, created_by, verified, active, created_at, updated_at';
+
+export async function fetchGroundById(id){
+  if(!ready || !id) return null;
+  const { data, error } = await sb.from('grounds').select(GROUND_COLUMNS).eq('id', id).maybeSingle();
+  if(error){ console.error('fetchGroundById failed:', error); return null; }
+  return toAppGround(data);
+}
+
+/* GROUND 7 — search by normalized name / city / country. No AI/vector
+   search, no full-text extension — plain ILIKE over indexed columns is
+   enough at this scale (see supabase_ground_location_migration.sql's
+   grounds_normalized_name_idx / grounds_city_idx / grounds_country_code_idx).
+   Verified grounds are surfaced first as a simple, honest trust signal. */
+export async function searchGrounds(term, { limit = 20 } = {}){
+  if(!ready) return [];
+  const q = sanitizeSearchTerm(normalizeGroundName(term));
+  let query = sb.from('grounds').select(GROUND_COLUMNS)
+    .eq('active', true)
+    .order('verified', { ascending: false }).order('name', { ascending: true })
+    .limit(limit);
+  // brief section 17 explicitly lists address as a searchable field alongside
+  // name/city/country — this was the one field the original implementation
+  // missed (verified against the actual code, not the original brief's list).
+  if(q) query = query.or(`normalized_name.ilike.%${q}%,city.ilike.%${q}%,country.ilike.%${q}%,address.ilike.%${q}%`);
+  const { data, error } = await query;
+  if(error){ console.error('searchGrounds failed:', error); return []; }
+  return data.map(toAppGround);
+}
+
+/* Haversine, not PostGIS — the brief is explicit that a geospatial extension
+   isn't worth installing for what this phase actually needs. Both callers
+   below do an indexed lat/lng bounding-box query first (cheap, uses
+   grounds_lat_lng_idx) and only run this in JS over that small candidate
+   set, not the whole table. */
+function haversineKm(lat1, lon1, lat2, lon2){
+  const R = 6371;
+  const dLat = (lat2 - lat1) * Math.PI / 180;
+  const dLon = (lon2 - lon1) * Math.PI / 180;
+  const a = Math.sin(dLat / 2) ** 2 +
+    Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * Math.sin(dLon / 2) ** 2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+function boundingBox(latitude, longitude, radiusKm){
+  const latPad = radiusKm / 111; // ~111km per degree of latitude, everywhere on Earth
+  const lonPad = radiusKm / (111 * Math.max(0.1, Math.cos(latitude * Math.PI / 180)));
+  return { minLat: latitude - latPad, maxLat: latitude + latPad, minLon: longitude - lonPad, maxLon: longitude + lonPad };
+}
+
+/* GROUND 16 — duplicate protection. Two independent signals, merged: an
+   (almost) exact normalized-name match, and anything within ~2km when
+   coordinates are available. Never auto-merges — this only returns
+   candidates for the picker to show as "possible existing ground found",
+   the human still chooses USE EXISTING or CREATE NEW. */
+const DUPLICATE_GROUND_RADIUS_KM = 2;
+
+export async function findPossibleDuplicateGrounds(name, latitude, longitude){
+  if(!ready) return [];
+  const results = new Map();
+
+  const q = normalizeGroundName(name);
+  if(q){
+    const { data, error } = await sb.from('grounds').select(GROUND_COLUMNS)
+      .eq('active', true).eq('normalized_name', q).limit(5);
+    if(error) console.error('findPossibleDuplicateGrounds (name) failed:', error);
+    else (data || []).forEach(r => results.set(r.id, toAppGround(r)));
+  }
+
+  if(typeof latitude === 'number' && typeof longitude === 'number'){
+    const box = boundingBox(latitude, longitude, DUPLICATE_GROUND_RADIUS_KM);
+    const { data, error } = await sb.from('grounds').select(GROUND_COLUMNS)
+      .eq('active', true)
+      .gte('latitude', box.minLat).lte('latitude', box.maxLat)
+      .gte('longitude', box.minLon).lte('longitude', box.maxLon)
+      .limit(20);
+    if(error) console.error('findPossibleDuplicateGrounds (coords) failed:', error);
+    else (data || []).forEach(r=>{
+      const d = haversineKm(latitude, longitude, r.latitude, r.longitude);
+      if(d <= DUPLICATE_GROUND_RADIUS_KM){
+        const existing = results.get(r.id);
+        results.set(r.id, { ...(existing || toAppGround(r)), distanceKm: d });
+      }
+    });
+  }
+
+  return [...results.values()];
+}
+
+/* Wired up in the Nearby Grounds & Maps phase — was a deliberately unused
+   backend hook in the Ground Location Foundation phase (section 30 of that
+   brief said not to build nearby discovery yet). Powers "Cricket Near You"
+   in app.js. Unchanged since it was first written: still bounding-box +
+   Haversine, still no PostGIS. */
+export async function fetchGroundsNear(latitude, longitude, radiusKm = 25, limit = 50){
+  if(!ready || typeof latitude !== 'number' || typeof longitude !== 'number') return [];
+  const box = boundingBox(latitude, longitude, radiusKm);
+  const { data, error } = await sb.from('grounds').select(GROUND_COLUMNS)
+    .eq('active', true)
+    .gte('latitude', box.minLat).lte('latitude', box.maxLat)
+    .gte('longitude', box.minLon).lte('longitude', box.maxLon)
+    .limit(limit * 3);
+  if(error){ console.error('fetchGroundsNear failed:', error); return []; }
+  return data
+    .map(r => ({ ...toAppGround(r), distanceKm: haversineKm(latitude, longitude, r.latitude, r.longitude) }))
+    .filter(r => r.distanceKm <= radiusKm)
+    .sort((a, b) => a.distanceKm - b.distanceKm)
+    .slice(0, limit);
+}
+
+export async function createGround(payload){
+  if(!ready || !currentUser) return null;
+  const name = String((payload && payload.name) || '').trim();
+  if(!name) return null;
+  const row = {
+    name,
+    latitude: (payload.latitude ?? null), longitude: (payload.longitude ?? null),
+    address: payload.address || '', city: payload.city || '', region: payload.region || '',
+    country: payload.country || '', country_code: payload.countryCode || null,
+    postal_code: payload.postalCode || null, timezone: payload.timezone || null,
+    created_by: currentUser.id
+  };
+  const { data, error } = await sb.from('grounds').insert(row).select(GROUND_COLUMNS).single();
+  if(error){ console.error('createGround failed:', error); return null; }
+  return toAppGround(data);
+}
+
+const GROUND_PATCH_FIELDS = {
+  name: 'name', latitude: 'latitude', longitude: 'longitude', address: 'address',
+  city: 'city', region: 'region', country: 'country', countryCode: 'country_code',
+  timezone: 'timezone', postalCode: 'postal_code'
+};
+
+/* Creator or admin only — RLS enforces this; `verified`/`active` are not in
+   GROUND_PATCH_FIELDS at all, so this function can't touch them even if a
+   caller passed them (see adminSetGroundVerified/adminSetGroundActive for
+   the only path that can). */
+export async function updateGround(id, patch){
+  if(!ready || !currentUser || !id || !patch) return null;
+  const row = {};
+  for(const [appKey, dbKey] of Object.entries(GROUND_PATCH_FIELDS)){
+    if(patch[appKey] !== undefined) row[dbKey] = patch[appKey];
+  }
+  if(!Object.keys(row).length) return null;
+  const { data, error } = await sb.from('grounds').update(row).eq('id', id).select(GROUND_COLUMNS).single();
+  if(error){ console.error('updateGround failed:', error); return null; }
+  return toAppGround(data);
+}
+
+/* GROUND 13 — Ground Detail counts/lists. Reads `fixtures`, not `matches`:
+   fixtures already has a "public tournament, role holder, or admin" read
+   policy, so it's the one match-shaped table a signed-out visitor to a
+   ground's public page can see anything from at all. Standalone friendly
+   matches stay owner-only, same as they always have been — a ground page
+   cannot and should not surface someone's private match. */
+export async function fetchGroundUpcomingFixtures(groundId, limit = 20){
+  if(!ready || !groundId) return [];
+  const nowIso = new Date().toISOString();
+  // tournaments(name) is a PostgREST embedded-resource select over the
+  // existing fixtures.tournament_id -> tournaments.id foreign key (no new
+  // relationship, no new column) — lets the ground detail list show which
+  // tournament each fixture belongs to instead of just a bare date.
+  const { data, error } = await sb.from('fixtures')
+    .select('id, tournament_id, stage, round, team_a_id, team_b_id, fixture_date, venue, match_id, status, tournaments(name)')
+    .eq('ground_id', groundId).gte('fixture_date', nowIso)
+    .order('fixture_date', { ascending: true }).limit(limit);
+  if(error){ console.error('fetchGroundUpcomingFixtures failed:', error); return []; }
+  return data;
+}
+
+/* Real tournaments hosted at this ground (brief section 15) — public only,
+   same visibility rule as fetchPublicTournaments, because Ground Detail is
+   reachable by signed-out visitors and must never leak a private
+   tournament just because it happens to share a ground_id. */
+export async function fetchGroundTournaments(groundId, limit = 8){
+  if(!ready || !groundId) return [];
+  const { data, error } = await sb.from('tournaments')
+    .select('id, name, status, start_date, end_date')
+    .eq('ground_id', groundId).eq('is_public', true)
+    .order('start_date', { ascending: true }).limit(limit);
+  if(error){ console.error('fetchGroundTournaments failed:', error); return []; }
+  return data;
+}
+
+export async function fetchGroundTournamentCount(groundId){
+  if(!ready || !groundId) return 0;
+  const { count, error } = await sb.from('tournaments')
+    .select('id', { count: 'exact', head: true }).eq('ground_id', groundId);
+  if(error){ console.error('fetchGroundTournamentCount failed:', error); return 0; }
+  return count || 0;
+}
+
+/* ---------------- grounds: admin (GROUND 17) ----------------
+   Plain .update() calls, not SECURITY DEFINER RPCs: the update policy above
+   already grants an admin full write access to any ground via
+   `public.is_admin()` in its USING/WITH CHECK, so no RLS bypass is needed
+   the way match-cancel needed one for a column regular users can never
+   touch at all. */
+
+export async function adminFetchGrounds({ search = '', max = 200 } = {}){
+  if(!ready) return [];
+  let query = sb.from('grounds').select(GROUND_COLUMNS).order('created_at', { ascending: false }).limit(max);
+  const q = sanitizeSearchTerm(normalizeGroundName(search));
+  if(q) query = query.or(`normalized_name.ilike.%${q}%,city.ilike.%${q}%,country.ilike.%${q}%,address.ilike.%${q}%`);
+  const { data, error } = await query;
+  if(error){ console.error('adminFetchGrounds failed:', error); throw error; }
+  return data.map(toAppGround);
+}
+
+export async function adminSetGroundVerified(id, verified){
+  if(!ready || !id) return false;
+  const { error } = await sb.from('grounds').update({ verified: !!verified }).eq('id', id);
+  if(error){ console.error('adminSetGroundVerified failed:', error); return false; }
+  return true;
+}
+
+export async function adminSetGroundActive(id, active){
+  if(!ready || !id) return false;
+  const { error } = await sb.from('grounds').update({ active: !!active }).eq('id', id);
+  if(error){ console.error('adminSetGroundActive failed:', error); return false; }
+  return true;
+}
+
+export async function adminDeleteGround(id){
+  if(!ready || !id) return false;
+  const { error } = await sb.from('grounds').delete().eq('id', id);
+  if(error){ console.error('adminDeleteGround failed:', error); return false; }
+  return true;
+}
+
+/* =========================================================================
+   NEARBY GROUNDS & MAPS — "Cricket Near You". Everything below reuses the
+   grounds/fixtures/tournaments tables and RLS policies from the Ground
+   Location Foundation phase as-is: no new table, no new column, no new
+   policy. Verified the existing grounds_lat_lng_idx / grounds_city_idx /
+   grounds_country_code_idx / fixtures_ground_id_idx / tournaments_ground_id_idx
+   (all added last phase) already cover every query pattern this phase
+   needs — nothing new to index.
+   ========================================================================= */
+
+/* Distinct countries among active grounds, for the Cricket Near You country
+   filter (brief section 19). Plain select + client-side dedupe, not a new
+   RPC/view — grounds is a small table at this app's real scale, so this is
+   simpler and just as fast as adding database machinery for it. */
+export async function fetchGroundCountries(){
+  if(!ready) return [];
+  const { data, error } = await sb.from('grounds')
+    .select('country, country_code').eq('active', true).not('country', 'is', null).limit(2000);
+  if(error){ console.error('fetchGroundCountries failed:', error); return []; }
+  const seen = new Map();
+  (data || []).forEach(r=>{
+    const name = (r.country || '').trim();
+    if(name && !seen.has(name)) seen.set(name, r.country_code || null);
+  });
+  return [...seen.entries()]
+    .map(([country, countryCode]) => ({ country, countryCode }))
+    .sort((a, b) => a.country.localeCompare(b.country));
+}
+
+/* Distinct cities within one country among active grounds (brief section
+   20's Country -> City drill-down). */
+export async function fetchGroundCities(country){
+  if(!ready || !country) return [];
+  const { data, error } = await sb.from('grounds')
+    .select('city').eq('active', true).eq('country', country).not('city', 'is', null).limit(2000);
+  if(error){ console.error('fetchGroundCities failed:', error); return []; }
+  const seen = new Set();
+  (data || []).forEach(r=>{ const c = (r.city || '').trim(); if(c) seen.add(c); });
+  return [...seen].sort((a, b) => a.localeCompare(b));
+}
+
+/* Precise country/city browsing (brief sections 19-20) — exact .eq() filters
+   on the real columns, deliberately separate from searchGrounds()'s fuzzy
+   ilike OR-match, which is built for a human typing a query, not for
+   "show me exactly this city". */
+export async function fetchGroundsByFilter({ country = '', city = '', limit = 50 } = {}){
+  if(!ready || (!country && !city)) return [];
+  let query = sb.from('grounds').select(GROUND_COLUMNS).eq('active', true)
+    .order('verified', { ascending: false }).order('name', { ascending: true }).limit(limit);
+  if(country) query = query.eq('country', country);
+  if(city) query = query.eq('city', city);
+  const { data, error } = await query;
+  if(error){ console.error('fetchGroundsByFilter failed:', error); return []; }
+  return data.map(toAppGround);
+}
+
+/* Batched upcoming fixtures across many grounds in one query — powers both
+   "Matches Near You" (brief section 16) and the real per-ground upcoming
+   count used for sorting/activity display (section 21/22), instead of
+   firing one fixtures query per ground in the nearby list (N+1). Same
+   fixtures RLS as fetchGroundUpcomingFixtures — guests only ever see
+   fixtures belonging to a public tournament. */
+export async function fetchUpcomingFixturesForGrounds(groundIds, limit = 200){
+  const ids = [...new Set((groundIds || []).filter(Boolean))];
+  if(!ready || !ids.length) return [];
+  const nowIso = new Date().toISOString();
+  const { data, error } = await sb.from('fixtures')
+    .select('id, tournament_id, ground_id, fixture_date, venue, status, tournaments(name)')
+    .in('ground_id', ids).gte('fixture_date', nowIso)
+    .order('fixture_date', { ascending: true }).limit(limit);
+  if(error){ console.error('fetchUpcomingFixturesForGrounds failed:', error); return []; }
+  return data;
+}
+
+/* =========================================================================
+   LOCAL CRICKET DISCOVERY — builds on Nearby Grounds & Maps. Same reuse
+   discipline: no new table, no new column beyond the ground_id backfill
+   fix above, no duplicate of the live-scoring/tournament/match systems.
+   ========================================================================= */
+
+/* Live matches at a batch of grounds, same "same shape as fetchLiveMatchesNow"
+   contract app.js's homeLiveCardHTML() already knows how to render (id,
+   match, location, updatedAt) plus groundId so the discovery feed can place
+   each one under the right ground/distance. Public read — live_matches' own
+   RLS is `using (true)`, same policy live.html and the Live Now screen
+   already rely on. */
+export async function fetchLiveMatchesForGrounds(groundIds){
+  const ids = [...new Set((groundIds || []).filter(Boolean))];
+  if(!ready || !ids.length) return [];
+  const { data, error } = await sb.from('live_matches')
+    .select('id, data, location, ground_id, updated_at')
+    .in('ground_id', ids).order('updated_at', { ascending: false });
+  if(error){ console.error('fetchLiveMatchesForGrounds failed:', error); return []; }
+  return data.map(r => ({ id: r.id, match: r.data, location: r.location || '', groundId: r.ground_id, updatedAt: r.updated_at }));
+}
+
+/* Public tournaments hosted at a batch of grounds — the "Tournaments Near
+   You" discovery section. Same is_public visibility rule as
+   fetchPublicTournaments/fetchGroundTournaments; this is the multi-ground
+   version of the latter. */
+export async function fetchTournamentsForGrounds(groundIds, limit = 30){
+  const ids = [...new Set((groundIds || []).filter(Boolean))];
+  if(!ready || !ids.length) return [];
+  const { data, error } = await sb.from('tournaments')
+    .select('id, name, status, start_date, end_date, ground_id')
+    .in('ground_id', ids).eq('is_public', true)
+    .order('start_date', { ascending: true }).limit(limit);
+  if(error){ console.error('fetchTournamentsForGrounds failed:', error); return []; }
+  return data;
+}
+
+/* Real roster-team counts for a batch of tournaments (the "12 Teams" figure
+   on a discovery tournament card) — one lightweight column-only select,
+   counted client-side, not a query per tournament. Tournaments that never
+   used the optional roster feature (Phase 5) simply count as 0, which is
+   correct: there's no other place a real team count could come from without
+   parsing every tournament's own data.teams[] JSONB one at a time. */
+export async function fetchTeamCountsForTournaments(tournamentIds){
+  const ids = [...new Set((tournamentIds || []).filter(Boolean))];
+  if(!ready || !ids.length) return {};
+  const { data, error } = await sb.from('tournament_teams').select('tournament_id').in('tournament_id', ids);
+  if(error){ console.error('fetchTeamCountsForTournaments failed:', error); return {}; }
+  const counts = {};
+  data.forEach(r => { counts[r.tournament_id] = (counts[r.tournament_id] || 0) + 1; });
+  return counts;
+}
+
+/* Unified discovery search (brief section 22) — plain database ilike search
+   across three tables in parallel, no AI, matching the same
+   sanitizeSearchTerm() discipline searchGrounds() already uses. Grounds
+   search is intentionally NOT duplicated here — callers already have
+   searchGrounds() for that; this covers the two new categories only. */
+export async function searchTournamentsByName(term, limit = 10){
+  if(!ready) return [];
+  const q = sanitizeSearchTerm(String(term || '').trim());
+  if(!q) return [];
+  const { data, error } = await sb.from('tournaments')
+    .select('id, name, status, start_date, location, ground_id')
+    .eq('is_public', true).ilike('name', `%${q}%`).limit(limit);
+  if(error){ console.error('searchTournamentsByName failed:', error); return []; }
+  return data;
+}
+
+export async function searchTeamsByName(term, limit = 10){
+  if(!ready) return [];
+  const q = sanitizeSearchTerm(String(term || '').trim());
+  if(!q) return [];
+  // tournaments!inner(...) restricts results to teams whose tournament is
+  // public — the same visibility rule as every other public discovery query
+  // in this file, enforced via the real tournament_teams.tournament_id FK.
+  const { data, error } = await sb.from('tournament_teams')
+    .select('id, name, tournament_id, tournaments!inner(name, is_public)')
+    .eq('tournaments.is_public', true).ilike('name', `%${q}%`).limit(limit);
+  if(error){ console.error('searchTeamsByName failed:', error); return []; }
+  return data.map(r => ({ id: r.id, name: r.name, tournamentId: r.tournament_id, tournamentName: r.tournaments && r.tournaments.name }));
 }
 
 /* ---------------- util ---------------- */

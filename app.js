@@ -67,14 +67,28 @@ import {
   markAllNotificationsRead, dismissNotification, watchMyNotifications,
   registerDeviceToken, removeDeviceToken,
   notifyOrganiserApplicationApproved, notifyMatchStarted, notifyMatchCompleted,
-  fetchMyTournamentRoles, fetchMyTournamentRole,
+  fetchMyTournamentRoles, fetchMyTournamentRole, grantTournamentRole,
   lockTournament, unlockTournament, setTournamentStatus, organizerCancelTournament,
   updateTournamentAsManager,
   fetchTournamentTeams, fetchTeamRoster, fetchMyTeamInvites, createTournamentTeam,
   invitePlayerToTeam, respondToTeamInvite, setTeamCaptain, removeTeamPlayer,
   fetchTournamentFixtureRows,
   assignFixtureRole as assignFixtureRoleCloud, unassignFixtureRole as unassignFixtureRoleCloud,
-  fetchTournamentMatches, raiseDispute, resolveDispute, fetchTournamentDisputes
+  fetchTournamentMatches, raiseDispute, resolveDispute, fetchTournamentDisputes,
+  fetchGroundById, searchGrounds, createGround, updateGround, findPossibleDuplicateGrounds,
+  fetchGroundUpcomingFixtures, fetchGroundTournamentCount,
+  adminFetchGrounds, adminSetGroundVerified, adminSetGroundActive, adminDeleteGround,
+  // Nearby Grounds & Maps phase — these six were called throughout the Cricket
+  // Near You screen below but never actually added to this import list, which
+  // would have thrown "X is not defined" the instant any of those code paths
+  // ran (node --check can't catch a missing import: undeclared-identifier use
+  // inside a module is a *runtime* ReferenceError, not a parse error). Caught
+  // and fixed while inspecting for this phase — see the final report.
+  fetchGroundsNear, fetchGroundCountries, fetchGroundCities, fetchGroundsByFilter,
+  fetchUpcomingFixturesForGrounds, fetchGroundTournaments,
+  // Local Cricket Discovery phase
+  fetchLiveMatchesForGrounds, fetchTournamentsForGrounds, fetchTeamCountsForTournaments,
+  searchTournamentsByName, searchTeamsByName
 } from './cloud.js';
 
 import { firebaseMessagingConfig, vapidKey, isPushConfigured } from './firebase-messaging-config.js';
@@ -107,6 +121,68 @@ let tab = 'home';
 let historyViewId = null;
 let undoStack = [];
 let teams = [], tournaments = [], events = [], cloudMatches = [];
+
+/* Ground Location Foundation — which ground (if any) is currently attached
+   to each in-progress form. Each is independent because the three forms
+   (schedule / match setup / fixture date) can all be open across different
+   sessions of using the app, and none of them share state today either
+   (evVenue/matchVenue/fxVenue are three separate inputs, not one). */
+let scheduleGroundId = null, scheduleGroundName = null;   // openScheduleModal (evVenue)
+let setupGroundId = null, setupGroundName = null;         // Match Setup screen (matchVenue)
+let fxGroundId = null, fxGroundName = null;               // openFixtureDateModal (fxVenue)
+let newTourGroundId = null, newTourGroundName = null;     // openNewTournamentModal (tGround)
+let openGroundId = null;       // Ground Detail screen — which ground is open
+let viewedGround = null;       // the fetched ground row for openGroundId
+let groundLoading = false;
+let groundLoadError = '';
+let groundUpcomingFixtures = [];
+let groundTournamentCount = 0;
+let adminGroundSearch = '';    // GROUND 17 — admin ground management
+let adminGrounds = [];
+let adminGroundsLoading = false;
+let adminGroundsLoaded = false;
+let groundTournaments = [];    // Nearby Grounds & Maps phase — real tournaments hosted at the viewed ground
+
+/* ---------------- Cricket Near You (Nearby Grounds & Maps phase) ----------------
+   Location is one-shot only, exactly like "Use My Current Location" in the
+   ground picker (GROUND 9) — same navigator.geolocation call, same
+   permission model. Never watched, never persisted: nearbyCoords lives in
+   this module-level variable only, which means it survives navigating away
+   and back within one open session (so returning to this screen doesn't
+   re-prompt GPS every time — brief section 27, "temporary unless the user
+   explicitly saves a preference") but is gone the moment the tab/app
+   closes, since nothing here ever reaches localStorage or the database. */
+let nearbyLoading = false;
+let nearbyLoadError = '';
+let nearbyLocStatus = 'idle';    // 'idle' | 'requesting' | 'granted' | 'denied' | 'unavailable'
+let nearbyLocError = '';
+let nearbyCoords = null;         // { latitude, longitude } — never persisted
+let nearbyRadiusKm = 25;
+let nearbyMode = 'location';     // 'location' | 'search' | 'city'
+let nearbySearchText = '';
+let nearbySortBy = 'distance';   // 'distance' | 'upcoming' | 'alpha'
+let nearbyCountryFilter = '';
+let nearbyCityFilter = '';
+let nearbyCountries = [];
+let nearbyCities = [];
+let nearbyResults = [];
+let nearbyActivityByGround = {}; // groundId -> real upcoming-fixture count
+let nearbyMatches = [];
+let nearbyMap = null;            // Leaflet map instance (lazy-created, kept alive across visits)
+let nearbyMarkersLayer = null;
+let nearbyUserMarker = null;
+let nearbySearchTimer = null;
+let leafletLoadPromise = null;   // lazy-load guard, see ensureLeafletLoaded()
+
+/* ---------------- Local Cricket Discovery (builds on Cricket Near You) ---------------- */
+let nearbyLive = [];             // live matches at the currently-shown grounds
+let nearbyLiveLoadedOnce = false; // guards the live-arrival toast from firing on first load
+let nearbyLiveUnsub = null;      // realtime subscription, torn down like liveNowUnsub/onlineUnsub
+let nearbyTournaments = [];      // public tournaments at the currently-shown grounds
+let nearbyTeamCounts = {};       // tournamentId -> real roster team count
+let nearbyDateFilter = 'all';    // 'all' | 'today' | 'tomorrow' | 'week' | 'weekend'
+let nearbySearchTournaments = []; // unified search results, tournaments category
+let nearbySearchTeams = [];       // unified search results, teams category
 let profile = { displayName:'', avatarId:DEFAULT_AVATAR };
 let editingTeamId = null, teamFormRoster = [], teamFormLogo = null;
 let pendingExtra = null;
@@ -245,13 +321,45 @@ function esc(s){
 }
 const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
 function dayStart(d){ const x = new Date(d); x.setHours(0,0,0,0); return x.getTime(); }
-function fmtWhen(iso){
+/* GROUND 15 — fmtWhen(iso) used to always render in the VIEWER's device
+   timezone (toLocaleTimeString with no `timeZone` option), even though the
+   match time is correctly stored as UTC. Invisible domestically; wrong the
+   moment scorer and viewer are in different zones (a 15:00 match in Lahore
+   showed as 10:00 in London, with nothing on screen saying so). The `tz`
+   argument is optional and additive — every existing call site that doesn't
+   pass one renders exactly as before, viewer-local, byte-for-byte the same
+   output. Callers that know a ground's IANA timezone (Ground Detail, match/
+   fixture cards once a ground is linked) pass it to render the scheduled
+   LOCAL time instead, with a short zone label appended only when it differs
+   from the viewer's own zone (no "15:00 GMT+5" noise for the common case of
+   everyone being local to the match). The relative day label (Today/
+   Tomorrow/...) intentionally stays viewer-relative — that's a calendar
+   question for the person looking at the screen, not the venue. */
+function fmtWhen(iso, tz){
   if(!iso) return 'No date set';
   const d = new Date(iso);
   const today = dayStart(new Date()), that = dayStart(d);
   const diff = Math.round((that - today) / 86400000);
-  const time = d.getHours() || d.getMinutes()
-    ? d.toLocaleTimeString([], { hour:'numeric', minute:'2-digit' }) : '';
+  const hasTime = d.getHours() || d.getMinutes();
+  let time = '';
+  if(hasTime){
+    const opts = { hour:'numeric', minute:'2-digit' };
+    if(tz){
+      try{
+        time = d.toLocaleTimeString([], { ...opts, timeZone: tz });
+        if(tz !== Intl.DateTimeFormat().resolvedOptions().timeZone){
+          const parts = new Intl.DateTimeFormat([], { timeZone: tz, timeZoneName: 'short' }).formatToParts(d);
+          const zone = parts.find(p => p.type === 'timeZoneName');
+          if(zone) time += ' ' + zone.value;
+        }
+      }catch(e){
+        // Invalid/unknown IANA identifier — shouldn't happen from a picked
+        // ground, but never let a bad string break date rendering.
+        time = '';
+      }
+    }
+    if(!time) time = d.toLocaleTimeString([], opts);
+  }
   let day;
   if(diff === 0) day = 'Today';
   else if(diff === 1) day = 'Tomorrow';
@@ -260,6 +368,20 @@ function fmtWhen(iso){
   else day = d.getDate() + ' ' + MONTHS[d.getMonth()];
   return time ? day + ' · ' + time : day;
 }
+
+/* Distance formatting for Cricket Near You (brief section 6) — metric only.
+   Checked the codebase for an existing unit-system/imperial preference
+   (profile, settings screen, anywhere) before writing this: there isn't
+   one, and the brief says not to add a new settings system just for this,
+   so this always renders km/m. Every cricket-playing nation in the grounds
+   table today is metric anyway. */
+function fmtDistance(km){
+  if(typeof km !== 'number' || !isFinite(km) || km < 0) return '';
+  if(km < 1) return Math.round(km * 1000) + ' m';
+  if(km < 10) return km.toFixed(1) + ' km';
+  return Math.round(km) + ' km';
+}
+
 /* Small day/month "date chip" (reuses the existing .event-date component
    styling) — used on tournament cards so the date reads at a glance instead
    of only inside a text line. Falls back to a "?" chip when no date is set
@@ -282,10 +404,10 @@ function isSignedIn(){ return cloudReady() && !!getUser(); }
 function requiresAccount(){ return cloudReady(); }
 
 /* ---------------- navigation ---------------- */
-const SCREENS = ['auth','home','setup','live','result','history','teams','tournaments','tournament','stats','profile','friends','admin','player','live-now','feedback','notifications'];
-const TAB_OF = { home:'home', tournaments:'tournaments', tournament:'tournaments',
+const SCREENS = ['auth','home','setup','live','result','history','teams','tournaments','tournament','stats','profile','friends','admin','player','live-now','feedback','notifications','ground','nearby'];
+const TAB_OF = { home:'home', tournaments:'tournaments', tournament:'tournaments', ground:'tournaments',
                  teams:'teams', stats:'profile', history:'history', profile:'profile',
-                 friends:'friends', admin:'admin', 'live-now':'live-now' };
+                 friends:'friends', admin:'admin', 'live-now':'live-now', nearby:'home' };
 
 /* Every screen-level navigation in the app funnels through here (confirmed:
    the few call sites that used to set `screen` directly — openTournamentView,
@@ -1382,7 +1504,7 @@ function renderAdmin(){
     adminLiveUnsub = watchAllLiveMatches(()=>{ if(screen === 'admin') refreshAdminLiveNow(); });
   }
 
-  ['overview','tournaments','matches','organisers','users','feedback','notifications','activity'].forEach(x=>
+  ['overview','tournaments','matches','organisers','users','feedback','notifications','activity','grounds'].forEach(x=>
     $('adminTab' + x[0].toUpperCase() + x.slice(1)).classList.toggle('hidden', x !== adminTab));
   document.querySelectorAll('#adminTabs .pill').forEach(p=>p.classList.toggle('active', p.dataset.atab === adminTab));
 
@@ -1394,6 +1516,7 @@ function renderAdmin(){
   else if(adminTab === 'feedback') renderAdminFeedback();
   else if(adminTab === 'notifications') renderAdminNotifications();
   else if(adminTab === 'activity') renderAdminActivity();
+  else if(adminTab === 'grounds') renderAdminGrounds();
 }
 
 function renderAdminOverview(){
@@ -2130,7 +2253,12 @@ const QA = [
   { id:'qaStats2',     label:'Rankings',      sub:'Career records',  icon:'<path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/>', go:'stats' },
   { id:'qaSched2',     label:'Schedule',      sub:'Fixtures',        icon:'<rect x="3" y="5" width="18" height="16" rx="2"/><path d="M8 3v4M16 3v4M3 10h18"/>', act:'schedule' },
   { id:'qaHist2',      label:'History',       sub:'Past results',    icon:'<path d="M3 12a9 9 0 109-9 9 9 0 00-6.4 2.6L3 8"/><path d="M3 4v4h4M12 7v5l3 2"/>', go:'history' },
-  { id:'qaFriends2',   label:'Find Players',  sub:'Search & connect', icon:'<circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/>', go:'friends' }
+  { id:'qaFriends2',   label:'Find Players',  sub:'Search & connect', icon:'<circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/>', go:'friends' },
+  // Nearby Grounds & Maps phase — primary entry point into "Cricket Near
+  // You" (see openNearby()). Uses act, not go: openNearby() does a little
+  // more than a bare screen switch (kicks off the country-filter fetch and
+  // resumes an already-granted location without re-prompting).
+  { id:'qaNearby2',    label:'Cricket Near You', sub:'Grounds nearby', icon:'<circle cx="12" cy="10" r="3"/><path d="M12 21s-7-6.5-7-11a7 7 0 0114 0c0 4.5-7 11-7 11z"/>', act:'nearby' }
 ];
 
 function renderHeroAndRail(){
@@ -2780,7 +2908,7 @@ function renderCricketNearYou(list){
 function inningsForTeam(m, key){
   return (m.innings || []).find(i=>i.battingTeam === key) || null;
 }
-function homeLiveCardHTML(r){
+function homeLiveCardHTML(r, extra){
   const m = r.match || {};
   const scoreFor = key=>{
     const inn = inningsForTeam(m, key);
@@ -2796,9 +2924,14 @@ function homeLiveCardHTML(r){
   // Tournament name, only when this device already knows it (see
   // tournamentNameCache above) — never a second query just for this label.
   const tourName = m.tournamentId ? tournamentNameCache[m.tournamentId] : null;
+  // Local Cricket Discovery phase — optional, additive: every existing call
+  // site (Home screen's Live Matches rail) passes no second argument and
+  // renders byte-for-byte as before. Only Cricket Near You's Live Near You
+  // section passes a real, already-computed distance string.
+  const distanceNote = extra && extra.distanceNote ? extra.distanceNote : '';
   return `<a class="live-card" href="./live.html?m=${esc(r.id)}" target="_blank" rel="noopener">
     <div class="lc-top">
-      <span class="lc-comp">${tourName ? esc(tourName) + (r.location ? ' &middot; ' + esc(r.location) : '') : esc(r.location || 'Live match')}</span>
+      <span class="lc-comp">${tourName ? esc(tourName) + (r.location ? ' &middot; ' + esc(r.location) : '') : esc(r.location || 'Live match')}${distanceNote ? ' &middot; ' + esc(distanceNote) : ''}</span>
       <span class="badge-live"><i></i>LIVE</span>
     </div>
     <div class="lc-teams">
@@ -2912,7 +3045,7 @@ function upcomingItems(limit = 6){
   const items = [];
   events.filter(e=>!e.done).forEach(e=>items.push({
     kind:'event', id:e.id, date:e.date, title:e.title || ((e.teamA||'') + ' v ' + (e.teamB||'')),
-    venue:e.venue, teamA:e.teamA, teamB:e.teamB, tournamentId:e.tournamentId, fixtureId:e.fixtureId,
+    venue:e.venue, groundId:e.groundId || null, teamA:e.teamA, teamB:e.teamB, tournamentId:e.tournamentId, fixtureId:e.fixtureId,
     oversLimit:e.oversLimit, type:e.type || 'match'
   }));
   tournaments.forEach(t=>{
@@ -2922,7 +3055,7 @@ function upcomingItems(limit = 6){
       items.push({
         kind:'fixture', id:f.id, date:f.date,
         title: teamNameById(t, f.teamAId) + ' v ' + teamNameById(t, f.teamBId),
-        venue:f.venue, teamA:teamNameById(t, f.teamAId), teamB:teamNameById(t, f.teamBId),
+        venue:f.venue, groundId:f.groundId || null, teamA:teamNameById(t, f.teamAId), teamB:teamNameById(t, f.teamBId),
         tournamentId:t.id, fixtureId:f.id, oversLimit:t.oversLimit,
         badge: f.stage === 'league' ? t.name : f.stage.replace('-', ' '),
         type:'match'
@@ -3014,6 +3147,8 @@ function mergedHistory(){
 /* ---------------- SCHEDULE EVENT ---------------- */
 function openScheduleModal(prefill){
   const p = prefill || {};
+  scheduleGroundId = p.groundId || null;
+  scheduleGroundName = scheduleGroundId ? (p.venue || null) : null;
   const todayISO = new Date(Date.now() - new Date().getTimezoneOffset()*60000).toISOString().slice(0,10);
   openModal(`
     <h3>Schedule a match</h3>
@@ -3029,6 +3164,8 @@ function openScheduleModal(prefill){
     </div>
     <label>Venue</label>
     <input type="text" id="evVenue" placeholder="Ground name" maxlength="40" value="${esc(p.venue||'')}">
+    <button type="button" class="btn secondary small" data-action="ev-select-ground" style="margin-top:6px;">📍 Select Ground</button>
+    ${scheduleGroundId ? `<div class="stat-dim" style="color:var(--acc-2);margin-top:4px;">&#10003; Linked to a saved ground</div>` : ''}
     <label>Overs</label>
     <input type="number" id="evOvers" min="1" max="90" value="${p.oversLimit || 20}">
     <button class="btn" data-action="save-event">Add to Schedule</button>
@@ -3036,16 +3173,30 @@ function openScheduleModal(prefill){
   `);
 }
 
+function evSelectGround(){
+  openGroundPicker((ground)=>{
+    scheduleGroundId = ground.id;
+    scheduleGroundName = ground.name;
+    openScheduleModal({
+      teamA: $('evA') ? $('evA').value : '', teamB: $('evB') ? $('evB').value : '',
+      venue: ground.name, oversLimit: $('evOvers') ? $('evOvers').value : 20,
+      groundId: ground.id
+    });
+  }, { prefillName: $('evVenue') ? $('evVenue').value.trim() : '' });
+}
+
 async function saveEventForm(){
   const a = $('evA').value.trim(), b = $('evB').value.trim();
   const date = $('evDate').value, time = $('evTime').value || '00:00';
   if(!a || !b){ toast('Enter both teams'); return; }
   if(!date){ toast('Pick a date'); return; }
+  const venueText = $('evVenue').value.trim();
   const ev = {
     id: makeId(), type:'match',
     title: a + ' v ' + b, teamA:a, teamB:b,
     date: new Date(date + 'T' + time).toISOString(),
-    venue: $('evVenue').value.trim(),
+    venue: venueText,
+    groundId: resolveGroundLinkAtSave(scheduleGroundId, scheduleGroundName, venueText) || undefined,
     oversLimit: Math.max(1, parseInt($('evOvers').value || '20', 10)),
     done:false, createdAt: Date.now()
   };
@@ -3067,6 +3218,7 @@ function startFromItem(kind, id){
   if(!it) return;
   setupPrefill = {
     teamA: it.teamA, teamB: it.teamB, venue: it.venue || '',
+    groundId: it.groundId || null,
     oversLimit: it.oversLimit || 20,
     tournamentId: it.tournamentId || null, fixtureId: it.fixtureId || null,
     eventId: kind === 'event' ? it.id : null
@@ -3085,6 +3237,8 @@ function renderSetup(){
                         : 'Starting a scheduled match.';
   } else ctx.classList.add('hidden');
 
+  setupGroundId = (p && p.groundId) || null;
+  setupGroundName = setupGroundId ? ((p && p.venue) || null) : null;
   if(p){
     $('teamAName').value = p.teamA || '';
     $('teamBName').value = p.teamB || '';
@@ -3096,6 +3250,22 @@ function renderSetup(){
   }
   refreshLiveToggle();
   renderSetupPicks();
+  renderSetupGroundHint();
+}
+
+function renderSetupGroundHint(){
+  const hint = $('setupGroundHint');
+  if(hint) hint.innerHTML = setupGroundId ? '&#10003; Linked to a saved ground' : '';
+}
+
+function setupSelectGround(){
+  openGroundPicker((ground)=>{
+    setupGroundId = ground.id;
+    setupGroundName = ground.name;
+    $('matchVenue').value = ground.name;
+    renderSetupGroundHint();
+    toast('Ground linked: ' + ground.name);
+  }, { prefillName: $('matchVenue') ? $('matchVenue').value.trim() : '' });
 }
 
 function refreshLiveToggle(){
@@ -3196,6 +3366,7 @@ function startMatch(toss){
     bowler: ($('bowlerName').value || 'Bowler 1').trim(),
     liveShare: $('liveShareToggle').checked && cloudReady() && !!getUser(),
     venue: $('matchVenue').value.trim(),
+    groundId: resolveGroundLinkAtSave(setupGroundId, setupGroundName, $('matchVenue').value.trim()),
     tournamentId: p.tournamentId || null,
     fixtureId: p.fixtureId || null,
     eventId: p.eventId || null,
@@ -4507,8 +4678,10 @@ function openNewTournamentModal(){
     </div>
     <label>Location</label>
     <input type="text" id="tLocation" placeholder="City / area" maxlength="60">
-    <label>Ground</label>
+    <label>Ground (default — individual fixtures can use a different ground)</label>
     <input type="text" id="tGround" placeholder="Ground name" maxlength="60">
+    <button type="button" class="btn secondary small" data-action="tour-select-ground" style="margin-top:6px;">📍 Select Ground</button>
+    <div class="stat-dim" id="tourGroundHint" style="color:var(--acc-2);margin-top:4px;"></div>
     <div class="row">
       <div><label>Start date</label><input type="date" id="tStartDate"></div>
       <div><label>End date</label><input type="date" id="tEndDate"></div>
@@ -4542,6 +4715,19 @@ function openNewTournamentModal(){
     <button class="btn secondary" data-action="close">Cancel</button>`);
   window.__tSelected = new Set();
   window.__tAdHoc = [];
+  newTourGroundId = null; newTourGroundName = null;
+}
+
+function tourSelectGround(){
+  openGroundPicker((ground)=>{
+    newTourGroundId = ground.id;
+    newTourGroundName = ground.name;
+    const input = $('tGround');
+    if(input) input.value = ground.name;
+    const hint = $('tourGroundHint');
+    if(hint) hint.innerHTML = '&#10003; Linked to a saved ground';
+    toast('Ground linked: ' + ground.name);
+  }, { prefillName: $('tGround') ? $('tGround').value.trim() : '' });
 }
 
 function toggleTourTeam(id){
@@ -4572,16 +4758,23 @@ async function createTournamentFromForm(){
   const endDate = $('tEndDate').value || null;
   if(startDate && endDate && endDate < startDate){ toast('End date is before the start date'); return; }
 
+  const groundText = $('tGround').value.trim();
   const t = createTournament({
     name, format: $('tFormat').value,
     oversLimit: Math.max(1, parseInt($('tOvers').value || '20', 10)),
     allOutWickets: Math.max(1, Math.min(11, parseInt($('tWickets').value || '10', 10))),
     teams: list,
-    location: $('tLocation').value.trim(), ground: $('tGround').value.trim(),
+    location: $('tLocation').value.trim(), ground: groundText,
     startDate, endDate, description: $('tDesc').value.trim(),
     entryRules: $('tEntryRules').value.trim(), rules: $('tRules').value.trim(),
     status: 'upcoming'
   });
+  // Ground Location Foundation — additive, mirrors how isPublic is set below:
+  // createTournament() in tournament.js stays untouched and fully covered by
+  // its own tests, this just attaches a plain property to the object it
+  // already returns. Dropped (not the stale linked id) if the ground field
+  // was retyped after picking, same rule as every other venue field.
+  t.groundId = resolveGroundLinkAtSave(newTourGroundId, newTourGroundName, groundText) || null;
   t.fixtures = generateRoundRobin(t, { legs: parseInt($('tLegs').value || '1', 10) });
   const publicToggle = $('tPublicToggle');
   t.isPublic = !!(publicToggle && !publicToggle.disabled && publicToggle.checked);
@@ -5401,6 +5594,8 @@ function openFixtureDateModal(fixtureId){
   const f = allFixtures(t).find(x=>x.id === fixtureId); if(!f) return;
   const d = f.date ? new Date(f.date) : new Date();
   const iso = new Date(d.getTime() - d.getTimezoneOffset()*60000).toISOString();
+  fxGroundId = f.groundId || null;
+  fxGroundName = fxGroundId ? (f.venue || null) : null;
   openModal(`<h3>${esc(teamNameById(t,f.teamAId))} v ${esc(teamNameById(t,f.teamBId))}</h3>
     <div class="row">
       <div><label>Date</label><input type="date" id="fxDate" value="${iso.slice(0,10)}"></div>
@@ -5408,8 +5603,26 @@ function openFixtureDateModal(fixtureId){
     </div>
     <label>Venue</label>
     <input type="text" id="fxVenue" placeholder="Ground" maxlength="40" value="${esc(f.venue||'')}">
+    <button type="button" class="btn secondary small" data-action="fx-select-ground" data-id="${esc(fixtureId)}" style="margin-top:6px;">📍 Select Ground</button>
+    <div class="stat-dim" id="fxGroundHint" style="color:var(--acc-2);margin-top:4px;">${fxGroundId ? '&#10003; Linked to a saved ground' : ''}</div>
     <button class="btn" data-action="save-fixture-date" data-id="${esc(fixtureId)}">Save</button>
     <button class="btn secondary" data-action="close">Cancel</button>`);
+}
+
+/* Deliberately does NOT re-call openFixtureDateModal() after a ground is
+   picked — that would reset fxDate/fxTime back to the fixture's last saved
+   values, discarding whatever the scorer had already typed in this same
+   modal. Updates the venue text and hint in place instead. */
+function fxSelectGround(fixtureId){
+  openGroundPicker((ground)=>{
+    fxGroundId = ground.id;
+    fxGroundName = ground.name;
+    const input = $('fxVenue');
+    if(input) input.value = ground.name;
+    const hint = $('fxGroundHint');
+    if(hint) hint.innerHTML = '&#10003; Linked to a saved ground';
+    toast('Ground linked: ' + ground.name);
+  }, { prefillName: $('fxVenue') ? $('fxVenue').value.trim() : '' });
 }
 
 /* Tournament Organizer Control Center — Phase 4. A manager's tournament
@@ -5436,6 +5649,7 @@ async function saveFixtureDate(fixtureId){
   const date = $('fxDate').value, time = $('fxTime').value || '00:00';
   f.date = date ? new Date(date + 'T' + time).toISOString() : null;
   f.venue = $('fxVenue').value.trim();
+  f.groundId = resolveGroundLinkAtSave(fxGroundId, fxGroundName, f.venue) || null;
   t.updatedAt = Date.now();
   saveTours();
   await saveTourWrite(t);
@@ -5675,6 +5889,8 @@ function render(){
     case 'teams': renderTeams(); break;
     case 'tournaments': renderTournaments(); break;
     case 'tournament': renderTournament(); break;
+    case 'ground': renderGround(); break;
+    case 'nearby': renderNearby(); break;
     case 'stats': renderStats(); break;
     case 'profile': renderProfile(); break;
     case 'friends': renderFriends(); break;
@@ -5694,6 +5910,9 @@ function render(){
   if(screen !== 'live-now' && liveNowUnsub){ liveNowUnsub(); liveNowUnsub = null; }
   if(screen !== 'admin' && onlineUnsub){ onlineUnsub(); onlineUnsub = null; }
   if(screen !== 'admin' && adminLiveUnsub){ adminLiveUnsub(); adminLiveUnsub = null; }
+  // Local Cricket Discovery — Live Near You's realtime feed, same
+  // subscribe-on-render/teardown-on-leave shape as liveNowUnsub above.
+  if(screen !== 'nearby' && nearbyLiveUnsub){ nearbyLiveUnsub(); nearbyLiveUnsub = null; }
 }
 
 /* ---------------- EVENTS ---------------- */
@@ -5756,6 +5975,23 @@ function bind(){
   $('qaTeams').addEventListener('click', ()=>go('teams'));
   $('qaHistory').addEventListener('click', ()=>go('history'));
   $('qaLiveNow').addEventListener('click', ()=>go('live-now'));
+
+  // Cricket Near You (Nearby Grounds & Maps phase) — screen-nearby is a
+  // static shell (like screen-live-now), present in the DOM from boot, so
+  // these bind once here rather than being re-attached on every render like
+  // the ground-picker modal's inputs have to be.
+  $('nearbySearchInput').addEventListener('input', (e)=>{
+    const term = e.target.value;
+    nearbySearchText = term;
+    clearTimeout(nearbySearchTimer);
+    nearbySearchTimer = setTimeout(()=>{
+      if(term.trim()){ nearbyMode = 'search'; runNearbySearch(); }
+      else if(nearbyCoords){ nearbyMode = 'location'; runNearbySearch(); }
+      else renderNearby();
+    }, 300);
+  });
+  $('nearbyCountrySelect').addEventListener('change', (e)=>nearbySetCountry(e.target.value));
+  $('nearbyCitySelect').addEventListener('change', (e)=>nearbySetCity(e.target.value));
   $('liveNowAreaFilter').addEventListener('input', e=>{ liveNowFilter = e.target.value; paintLiveNowList(); });
   document.querySelectorAll('#liveNowFormatTabs .pill').forEach(p=>
     p.addEventListener('click', ()=>{ liveNowFormat = p.dataset.lnf; paintLiveNowList(); }));
@@ -5895,6 +6131,15 @@ function bind(){
   $('adminTourStatusFilter').addEventListener('change', e=>{ adminTourStatusFilter = e.target.value; renderAdminTournaments(); });
   $('adminTourLocationFilter').addEventListener('input', e=>{ adminTourLocationFilter = e.target.value; renderAdminTournaments(); });
   $('adminUserSearch').addEventListener('input', e=>{ adminUserSearch = e.target.value; renderAdminUsers(); });
+  // Debounced, unlike the client-side filters above — adminFetchGrounds() is
+  // a real network query (search + city + country ILIKE), not a filter over
+  // an already-fetched array, so this shouldn't fire on every keystroke.
+  let adminGroundSearchTimer = null;
+  $('adminGroundSearch').addEventListener('input', e=>{
+    adminGroundSearch = e.target.value;
+    clearTimeout(adminGroundSearchTimer);
+    adminGroundSearchTimer = setTimeout(loadAdminGrounds, 300);
+  });
   $('adminFeedbackTypeFilter').addEventListener('change', e=>{ adminFeedbackTypeFilter = e.target.value; renderAdminFeedback(); });
   $('notifRetryBtn').addEventListener('click', ()=>refreshAdminData().then(renderAdmin));
 
@@ -5970,6 +6215,1113 @@ function bind(){
   $('friendSearchInput').addEventListener('keydown', e=>{ if(e.key === 'Enter') doFriendSearch(); });
 
   // delegated
+  /* =========================================================================
+     GROUND PICKER — Ground Location Foundation (GROUND 8/9/10/16).
+
+     A small self-contained state machine reusing openModal()/closeModal(),
+     the same shape as the existing toss flow (pendingToss + pickToss +
+     updateTossPreview). Every existing venue text input (evVenue/matchVenue/
+     fxVenue/tGround) gets a "Select Ground" button next to it, not instead
+     of it — picking a ground just auto-fills that existing input with the
+     ground's name and separately remembers its id, so every one of the 15+
+     places that already render `.venue`/`.ground` keeps working unchanged,
+     and a match/fixture/tournament with no ground behaves exactly as it
+     always has.
+
+     No reverse geocoding, on purpose: "Use My Current Location" attaches
+     real GPS coordinates only. City/country/address stay whatever the user
+     types. That's what keeps this feature at zero ongoing API cost (see
+     GROUND-ARCHITECTURE.md) — ambitious geocoding-on-the-fly can come later
+     once there's real usage to justify a provider bill.
+     ========================================================================= */
+  let gpState = null;
+  let gpSearchTimer = null;
+
+  function openGroundPicker(onSelect, opts){
+    const o = opts || {};
+    gpState = {
+      step: 'search',
+      onSelect,
+      query: o.prefillName || '',
+      results: [],
+      searching: false,
+      draft: { name: o.prefillName || '', address: '', city: '', region: '', country: '', countryCode: '' },
+      detected: null,     // { latitude, longitude, accuracy }
+      dupes: [],
+      locBusy: false,
+      locError: ''
+    };
+    renderGroundPicker();
+    if(gpState.query) runGroundSearch(gpState.query);
+  }
+
+  function closeGroundPicker(){ gpState = null; closeModal(); }
+
+  async function runGroundSearch(term){
+    if(!gpState) return;
+    gpState.query = term;
+    gpState.searching = true;
+    const results = await searchGrounds(term, { limit: 15 });
+    if(!gpState) return; // picker closed while the search was in flight
+    gpState.results = results;
+    gpState.searching = false;
+    renderGroundPicker();
+  }
+
+  function pickGround(ground){
+    if(!gpState || !ground) return;
+    const cb = gpState.onSelect;
+    closeGroundPicker();
+    if(cb) cb(ground);
+  }
+
+  function renderGroundPicker(){
+    if(!gpState) return;
+    if(gpState.step === 'create') return renderGroundPickerCreate();
+    if(gpState.step === 'confirm-location') return renderGroundPickerConfirmLocation();
+    if(gpState.step === 'dupe-check') return renderGroundPickerDupeCheck();
+    return renderGroundPickerSearch();
+  }
+
+  function groundResultRow(g, extra){
+    const meta = [g.city, g.country].filter(Boolean).join(', ') || 'Location not set';
+    const dist = (extra && typeof g.distanceKm === 'number') ? ` · ${g.distanceKm.toFixed(1)} km away` : '';
+    return `<button class="list-pick" data-action="gp-select" data-id="${esc(g.id)}" style="width:100%;text-align:left;background:none;border:none;border-bottom:1px solid var(--line);cursor:pointer;font-family:inherit;padding:10px 0;">
+      <div style="font-weight:600;">🏏 ${esc(g.name)}${g.verified ? ' &#10003;' : ''}</div>
+      <div class="stat-dim">${esc(meta)}${dist}</div>
+    </button>`;
+  }
+
+  function renderGroundPickerSearch(){
+    const rows = gpState.results.map(g => groundResultRow(g)).join('');
+    const empty = gpState.searching ? 'Searching…' : (gpState.query ? 'No grounds found.' : 'Type to search, or add a new ground below.');
+    openModal(`
+      <h3>🏏 Select Ground</h3>
+      <input type="text" id="gpSearchInput" placeholder="Search grounds…" autocomplete="off" value="${esc(gpState.query)}">
+      <div id="gpResultsBox" style="max-height:240px;overflow-y:auto;margin-top:8px;">
+        ${rows || `<div class="empty-note">${esc(empty)}</div>`}
+      </div>
+      <button class="btn secondary" data-action="gp-use-location" style="margin-top:14px;" ${gpState.locBusy ? 'disabled' : ''}>
+        ${gpState.locBusy ? 'Getting location…' : '📍 Use My Current Location'}
+      </button>
+      ${gpState.locError ? `<div class="stat-dim" style="color:var(--danger,#e4322a);margin-top:6px;">${esc(gpState.locError)}</div>` : ''}
+      <div class="stat-dim" style="text-align:center;margin:14px 0;">— OR —</div>
+      <button class="btn secondary" data-action="gp-create-new">+ Create New Ground</button>
+      <button class="btn secondary" data-action="close" style="margin-top:8px;">Cancel</button>
+    `);
+    const input = $('gpSearchInput');
+    if(input){
+      input.focus();
+      const v = input.value; input.value = ''; input.value = v; // caret to end
+      input.addEventListener('input', e=>{
+        const term = e.target.value;
+        clearTimeout(gpSearchTimer);
+        gpSearchTimer = setTimeout(()=>runGroundSearch(term), 300);
+      });
+    }
+  }
+
+  function renderGroundPickerCreate(){
+    const d = gpState.draft;
+    const hasCoords = !!gpState.detected;
+    openModal(`
+      <h3>+ Create New Ground</h3>
+      <label>Ground Name</label>
+      <input type="text" id="gpName" placeholder="e.g. Model Town Cricket Ground" maxlength="120" value="${esc(d.name)}">
+      ${hasCoords
+        ? `<div class="stat-dim" style="margin:8px 0;">📍 Using your current location (${gpState.detected.latitude.toFixed(4)}, ${gpState.detected.longitude.toFixed(4)})
+             — <button type="button" data-action="gp-clear-location" style="background:none;border:none;color:var(--acc-2);cursor:pointer;text-decoration:underline;padding:0;font:inherit;">remove</button></div>`
+        : `<button class="btn secondary small" data-action="gp-use-location" style="margin:8px 0;" ${gpState.locBusy ? 'disabled' : ''}>${gpState.locBusy ? 'Getting location…' : '📍 Use My Current Location'}</button>`}
+      ${gpState.locError ? `<div class="stat-dim" style="color:var(--danger,#e4322a);margin:4px 0;">${esc(gpState.locError)}</div>` : ''}
+      <label>Address (optional)</label>
+      <input type="text" id="gpAddress" placeholder="Street / area" maxlength="200" value="${esc(d.address)}">
+      <div class="row">
+        <div><label>City</label><input type="text" id="gpCity" placeholder="e.g. Lahore" maxlength="100" value="${esc(d.city)}"></div>
+        <div><label>Country</label><input type="text" id="gpCountry" placeholder="e.g. Pakistan" maxlength="100" value="${esc(d.country)}"></div>
+      </div>
+      <div class="stat-dim">Grounds without coordinates still work — they just won't show up in distance-based features later. You can always add location afterwards.</div>
+      <button class="btn" data-action="gp-confirm-create">Confirm Ground</button>
+      <button class="btn secondary" data-action="gp-back-to-search">Back</button>
+    `);
+    const nameInput = $('gpName');
+    if(nameInput) nameInput.focus();
+  }
+
+  function renderGroundPickerConfirmLocation(){
+    const d = gpState.detected;
+    const mapsUrl = `https://www.google.com/maps?q=${d.latitude},${d.longitude}`;
+    openModal(`
+      <h3>📍 Location Detected</h3>
+      <div class="card" style="margin:10px 0;">
+        <div class="stat-dim">Latitude</div><div style="font-weight:600;">${d.latitude.toFixed(6)}</div>
+        <div class="stat-dim" style="margin-top:8px;">Longitude</div><div style="font-weight:600;">${d.longitude.toFixed(6)}</div>
+        <a href="${esc(mapsUrl)}" target="_blank" rel="noopener noreferrer" style="display:inline-block;margin-top:10px;color:var(--acc-2);">View on map &#8250;</a>
+      </div>
+      <div class="stat-dim">This will be attached to the ground. You'll still enter its name, city and country yourself — nothing is looked up automatically.</div>
+      <button class="btn" data-action="gp-confirm-location">Confirm &amp; Continue</button>
+      <button class="btn secondary" data-action="gp-use-location">Retry</button>
+      <button class="btn secondary" data-action="gp-cancel-location">Back</button>
+    `);
+  }
+
+  function renderGroundPickerDupeCheck(){
+    const rows = gpState.dupes.map(g => groundResultRow(g, true)).join('');
+    openModal(`
+      <h3>Possible existing ground found</h3>
+      <div class="stat-dim">This looks similar to a ground already on Cricket Connect. Use it instead of creating a duplicate?</div>
+      <div style="max-height:220px;overflow-y:auto;margin:10px 0;">${rows}</div>
+      <button class="btn" data-action="gp-create-anyway">Create New Ground Anyway</button>
+      <button class="btn secondary" data-action="gp-back-to-create">Back</button>
+    `);
+  }
+
+  /* GeolocationPositionError codes: 1 PERMISSION_DENIED, 2 POSITION_UNAVAILABLE,
+     3 TIMEOUT. The browser (and, inside Capacitor, the WebView bridge — see
+     GROUND-ARCHITECTURE.md) never distinguishes "denied this time" from
+     "permanently denied"; once denied, later calls just get code 1 again
+     immediately with no fresh prompt, hence the settings hint below. */
+  function geolocationErrorMessage(err){
+    if(err && err.code === 1) return 'Location permission was not granted. You can still add the ground by entering its address manually. To try GPS again, allow location for Cricket Connect in your browser/device settings.';
+    if(err && err.code === 2) return 'Could not determine your location (GPS unavailable or device location is turned off). You can enter the address manually.';
+    if(err && err.code === 3) return 'Location request timed out. You can try again, or enter the address manually.';
+    return 'Could not get your location. You can enter the ground address manually instead.';
+  }
+
+  function gpUseLocation(){
+    if(!gpState || gpState.locBusy) return;
+    if(!('geolocation' in navigator)){
+      gpState.locError = 'Location is not available on this device or browser. You can still add the ground manually.';
+      renderGroundPicker();
+      return;
+    }
+    gpState.locBusy = true; gpState.locError = '';
+    renderGroundPicker();
+    navigator.geolocation.getCurrentPosition(
+      (pos)=>{
+        if(!gpState) return;
+        gpState.locBusy = false;
+        gpState.detected = { latitude: pos.coords.latitude, longitude: pos.coords.longitude, accuracy: pos.coords.accuracy };
+        gpState.step = 'confirm-location';
+        renderGroundPicker();
+      },
+      (err)=>{
+        if(!gpState) return;
+        gpState.locBusy = false;
+        gpState.locError = geolocationErrorMessage(err);
+        renderGroundPicker();
+      },
+      { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 }
+    );
+  }
+
+  async function gpConfirmCreate(){
+    if(!gpState) return;
+    const nameInput = $('gpName');
+    const name = (nameInput ? nameInput.value : '').trim();
+    if(!name){ toast('Enter a ground name'); return; }
+    if(!cloudReady() || !getUser()){ toast('Sign in to add a new ground'); return; }
+    gpState.draft = {
+      name,
+      address: ($('gpAddress') ? $('gpAddress').value : '').trim(),
+      city: ($('gpCity') ? $('gpCity').value : '').trim(),
+      region: '',
+      country: ($('gpCountry') ? $('gpCountry').value : '').trim(),
+      countryCode: ''
+    };
+    const lat = gpState.detected ? gpState.detected.latitude : null;
+    const lng = gpState.detected ? gpState.detected.longitude : null;
+    const dupes = await findPossibleDuplicateGrounds(name, lat, lng);
+    if(!gpState) return;
+    if(dupes.length){
+      gpState.dupes = dupes;
+      gpState.step = 'dupe-check';
+      renderGroundPicker();
+      return;
+    }
+    await gpActuallyCreate();
+  }
+
+  async function gpActuallyCreate(){
+    if(!gpState) return;
+    const payload = { ...gpState.draft };
+    if(gpState.detected){ payload.latitude = gpState.detected.latitude; payload.longitude = gpState.detected.longitude; }
+    const ground = await createGround(payload);
+    if(!ground){ toast('Could not save ground — try again'); return; }
+    toast('Ground added');
+    pickGround(ground);
+  }
+
+  /* Called at SAVE time by each of the four wiring sites below, not on every
+     keystroke: if the venue text no longer matches the name that was set
+     when the ground was picked (the scorer retyped over it), the link is
+     dropped rather than silently saved against a now-mismatched name. Never
+     guesses which is "right" — just refuses to save a pairing that might
+     not be. */
+  function resolveGroundLinkAtSave(groundId, selectedName, currentVenueText){
+    if(!groundId) return null;
+    return (selectedName || '').trim() === (currentVenueText || '').trim() ? groundId : null;
+  }
+
+  /* =========================================================================
+     GROUND DETAIL — GROUND 13/14/22. In-SPA screen, same shape as tournament
+     detail (go('ground') + openGroundId + renderGround(), wired into the
+     main render() switch), not a standalone page like player.html — see
+     GROUND-ARCHITECTURE.md for why that's the better fit here. Shareable via
+     index.html?ground=<id>, same convention as ?tour=<id>.
+     ========================================================================= */
+
+  async function openGroundView(id){
+    if(!id) return;
+    openGroundId = id;
+    viewedGround = null;
+    groundLoading = true;
+    groundLoadError = '';
+    groundUpcomingFixtures = [];
+    groundTournamentCount = 0;
+    groundTournaments = [];
+    go('ground');
+    try{
+      const [g, fixtures, tourCount, tours] = await Promise.all([
+        fetchGroundById(id),
+        fetchGroundUpcomingFixtures(id, 20),
+        fetchGroundTournamentCount(id),
+        fetchGroundTournaments(id, 8)
+      ]);
+      if(openGroundId !== id) return; // navigated away while this was in flight
+      viewedGround = g;
+      groundUpcomingFixtures = fixtures;
+      groundTournamentCount = tourCount;
+      groundTournaments = tours;
+      if(!g) groundLoadError = 'Ground not found.';
+    }catch(err){
+      console.error('openGroundView failed:', err);
+      if(openGroundId === id) groundLoadError = 'Could not load this ground right now.';
+    }finally{
+      if(openGroundId === id){
+        groundLoading = false;
+        if(screen === 'ground') renderGround();
+      }
+    }
+  }
+
+  function groundShareUrl(id){
+    return location.origin + location.pathname.replace(/index\.html$/, '') + 'index.html?ground=' + encodeURIComponent(id);
+  }
+
+  async function groundShare(id){
+    const g = (viewedGround && viewedGround.id === id) ? viewedGround : null;
+    const url = groundShareUrl(id);
+    try{
+      if(navigator.share) await navigator.share({ title: (g ? g.name : 'Ground') + ' — Cricket Connect', url });
+      else { await navigator.clipboard.writeText(url); toast('Link copied'); }
+    }catch(e){ /* user dismissed the native share sheet — not an error */ }
+  }
+
+  /* No embedded map, by design (brief section 21/29) — hands off to the
+     device's own maps app/site via a universal Google Maps URL. Not a geo:
+     URI: those aren't handled by desktop browsers at all, where this exact
+     same URL just opens the Google Maps website instead — one URL that
+     behaves correctly everywhere rather than two code paths to maintain. */
+  function groundDirections(id){
+    const g = (viewedGround && viewedGround.id === id) ? viewedGround : null;
+    if(!g || g.latitude == null || g.longitude == null){ toast('No location saved for this ground yet'); return; }
+    const url = `https://www.google.com/maps/dir/?api=1&destination=${g.latitude},${g.longitude}`;
+    window.open(url, '_blank', 'noopener');
+  }
+
+  function renderGround(){
+    const box = $('screen-ground');
+    if(!box) return;
+    if(groundLoading){ box.innerHTML = skeletonRows(3); return; }
+    if(groundLoadError || !viewedGround){
+      box.innerHTML = `<div class="empty-note">${esc(groundLoadError || 'Ground not found.')}<br>
+        <button class="btn secondary small" data-action="go-home">Back to Home</button></div>`;
+      return;
+    }
+    const g = viewedGround;
+    const meta = [g.address, g.city, g.country].filter(Boolean).join(', ');
+    const hasCoords = g.latitude != null && g.longitude != null;
+    // Distance is contextual, not a ground property — only shown when the
+    // viewer actually arrived here from a Cricket Near You search that
+    // already computed it (brief section 12's "2.1 km away"). Ground Detail
+    // itself never runs its own distance calculation.
+    const fromNearby = nearbyResults.find(r => r.id === g.id);
+    const distLine = (fromNearby && typeof fromNearby.distanceKm === 'number')
+      ? `<div class="stat-dim">📍 ${esc(fmtDistance(fromNearby.distanceKm))} away</div>` : '';
+    const fixtureRows = groundUpcomingFixtures.length
+      ? groundUpcomingFixtures.map(f => `
+          <div class="list-pick" style="cursor:default;">
+            <div class="lp-n">${esc((f.tournaments && f.tournaments.name) || 'Match')}</div>
+            <div class="stat-dim">${esc(fmtWhen(f.fixture_date, g.timezone))}${f.status ? ' &middot; ' + esc(f.status) : ''}</div>
+          </div>`).join('')
+      : `<div class="empty-note">No upcoming matches at this ground.</div>`;
+    const tourRows = groundTournaments.length
+      ? groundTournaments.map(t => {
+          const matchCount = groundUpcomingFixtures.filter(f => f.tournament_id === t.id).length;
+          return `<div class="list-pick" style="cursor:default;">
+            <div class="lp-n">🏆 ${esc(t.name)}</div>
+            <div class="stat-dim">${matchCount} upcoming match${matchCount === 1 ? '' : 'es'}</div>
+            <button class="btn secondary small" data-action="open-tour" data-id="${esc(t.id)}" style="margin-top:6px;">View Tournament</button>
+          </div>`;
+        }).join('')
+      : `<div class="empty-note">No upcoming tournaments at this ground.</div>`;
+    box.innerHTML = `
+      <div class="card">
+        <h2>🏏 ${esc(g.name)}${g.verified ? ' &#10003;' : ''}</h2>
+        <div class="stat-dim">${esc(meta || 'No address on file')}</div>
+        ${g.timezone ? `<div class="stat-dim">Timezone: ${esc(g.timezone)}</div>` : ''}
+        <div class="stat-dim">${hasCoords ? '📍 Location available' : 'No GPS location saved yet'}</div>
+        ${distLine}
+        <div class="row" style="margin-top:10px;">
+          <div><div style="font-size:22px;font-weight:700;">${groundUpcomingFixtures.length}</div><div class="stat-dim">Upcoming</div></div>
+          <div><div style="font-size:22px;font-weight:700;">${groundTournamentCount}</div><div class="stat-dim">Tournaments</div></div>
+        </div>
+        <button class="btn secondary" data-action="ground-directions" data-id="${esc(g.id)}" ${hasCoords ? '' : 'disabled'}>Get Directions</button>
+        <button class="btn secondary" data-action="ground-share" data-id="${esc(g.id)}">Share Ground</button>
+      </div>
+      <div class="card">
+        <h3>Upcoming Matches</h3>
+        ${fixtureRows}
+      </div>
+      <div class="card">
+        <h3>Upcoming Tournaments</h3>
+        ${tourRows}
+      </div>
+    `;
+  }
+
+  /* =========================================================================
+     CRICKET NEAR YOU — Nearby Grounds & Maps phase. In-SPA screen, same
+     go('nearby') + renderNearby() shape as Ground Detail above. Guest-
+     accessible (not in GATED) for the same reason Ground Detail isn't:
+     browsing grounds never required an account, only creating one does.
+
+     Map: Leaflet + OpenStreetMap raster tiles, loaded lazily from a CDN only
+     the first time this screen actually needs to draw a map (ensureLeaflet
+     Loaded()) — nothing added to sw.js's SHELL precache list or index.html's
+     <head>, so every user who never opens this screen pays zero extra
+     bytes. No API key: OSM's standard tile endpoint requires none, and this
+     screen only ever requests the tiles for its own current viewport
+     (never bulk/offline caching), which is exactly the usage OSM's tile
+     policy permits. See the final report for the full provider comparison.
+
+     Location: one-shot only, identical model to "Use My Current Location"
+     in the ground picker (GROUND 9) — same navigator.geolocation call, same
+     native permission dialog. nearbyCoords is never written to localStorage,
+     sessionStorage, or the database; it lives only in the module-level
+     variable above for the lifetime of the tab.
+     ========================================================================= */
+
+  function openNearby(){
+    go('nearby');
+    if(!nearbyCountries.length) loadNearbyFilters();
+    if(nearbyMode === 'location' && nearbyCoords) runNearbySearch();
+  }
+
+  function loadNearbyFilters(){
+    fetchGroundCountries().then(list=>{
+      nearbyCountries = list;
+      if(screen === 'nearby') renderNearby();
+    });
+  }
+
+  function nearbySetCountry(country){
+    nearbyCountryFilter = country;
+    nearbyCityFilter = '';
+    nearbyCities = [];
+    nearbyMode = 'city';
+    if(country){
+      fetchGroundCities(country).then(list=>{
+        nearbyCities = list;
+        if(screen === 'nearby') renderNearby();
+      });
+    }
+    runNearbySearch();
+  }
+
+  function nearbySetCity(city){
+    nearbyCityFilter = city;
+    nearbyMode = 'city';
+    runNearbySearch();
+  }
+
+  // Same GeolocationPositionError codes as geolocationErrorMessage() in the
+  // ground picker above (1 PERMISSION_DENIED, 2 POSITION_UNAVAILABLE, 3
+  // TIMEOUT) — kept as its own small copy rather than a shared call so this
+  // screen never depends on exactly where in the file that helper lives.
+  function nearbyLocationErrorMessage(err){
+    if(err && err.code === 1) return 'Location permission was not granted. You can still search by city or ground name.';
+    if(err && err.code === 2) return 'Could not determine your location (GPS unavailable or device location is off). Try searching by city instead.';
+    if(err && err.code === 3) return 'Location request timed out. You can try again, or search by city.';
+    return 'Location access is unavailable.';
+  }
+
+  function nearbyRequestLocation(){
+    if(nearbyLocStatus === 'requesting') return;
+    if(!('geolocation' in navigator)){
+      nearbyLocStatus = 'unavailable';
+      nearbyLocError = 'Location is not available on this device or browser.';
+      renderNearby();
+      return;
+    }
+    nearbyLocStatus = 'requesting';
+    nearbyLocError = '';
+    renderNearby();
+    navigator.geolocation.getCurrentPosition(
+      (pos)=>{
+        nearbyLocStatus = 'granted';
+        nearbyCoords = { latitude: pos.coords.latitude, longitude: pos.coords.longitude };
+        nearbyMode = 'location';
+        nearbyRadiusKm = 25;
+        runNearbySearch();
+      },
+      (err)=>{
+        nearbyLocStatus = 'denied';
+        nearbyLocError = nearbyLocationErrorMessage(err);
+        renderNearby();
+      },
+      { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 }
+    );
+  }
+
+  // Local Cricket Discovery phase — widened from the previous 25/50 pair
+  // (brief section 6 example set). Distance filter always steps through
+  // these fixed tiers rather than an arbitrary value: no configurable
+  // settings architecture exists to source them from (checked), so a small
+  // fixed set beats either hardcoding one arbitrary number or inventing a
+  // new settings system just for this.
+  const NEARBY_RADIUS_TIERS = [5, 10, 25, 50];
+
+  function nearbyExpandRadius(){
+    const idx = NEARBY_RADIUS_TIERS.indexOf(nearbyRadiusKm);
+    const next = (idx >= 0 && idx < NEARBY_RADIUS_TIERS.length - 1) ? NEARBY_RADIUS_TIERS[idx + 1] : NEARBY_RADIUS_TIERS[NEARBY_RADIUS_TIERS.length - 1];
+    if(next === nearbyRadiusKm) return;
+    nearbyRadiusKm = next;
+    runNearbySearch();
+  }
+
+  /* Five sort options, all backed by real, distinct data (brief section 14:
+     "only implement sorting that can be supported by real data") —
+     Live Now and Most Active used to collapse into the same thing when the
+     only real signal was upcoming-fixture count (see the previous phase's
+     report); now that live match presence is real and reliable too (fixed
+     the live_matches ground_id bug above), all five are genuinely different:
+       distance -> nearest first
+       live     -> has a live match right now first
+       soon     -> earliest upcoming fixture time first
+       active   -> highest (live count, weighted) + upcoming count
+       newest   -> most recently added ground first
+       alpha    -> A-Z */
+  function applyNearbySort(){
+    const arr = nearbyResults.slice();
+    const liveCountByGround = {};
+    nearbyLive.forEach(r=>{ if(r.groundId) liveCountByGround[r.groundId] = (liveCountByGround[r.groundId] || 0) + 1; });
+    const soonByGround = {};
+    nearbyMatches.forEach(f=>{
+      if(!f.ground_id || !f.fixture_date) return;
+      if(!soonByGround[f.ground_id] || f.fixture_date < soonByGround[f.ground_id]) soonByGround[f.ground_id] = f.fixture_date;
+    });
+    if(nearbySortBy === 'distance' && arr.every(g=>typeof g.distanceKm === 'number')){
+      arr.sort((a,b)=>a.distanceKm - b.distanceKm);
+    } else if(nearbySortBy === 'live'){
+      arr.sort((a,b)=>(liveCountByGround[b.id]||0) - (liveCountByGround[a.id]||0) || a.name.localeCompare(b.name));
+    } else if(nearbySortBy === 'soon'){
+      arr.sort((a,b)=>{
+        const sa = soonByGround[a.id], sb = soonByGround[b.id];
+        if(sa && sb) return sa < sb ? -1 : (sa > sb ? 1 : 0);
+        if(sa) return -1; if(sb) return 1;
+        return a.name.localeCompare(b.name);
+      });
+    } else if(nearbySortBy === 'active'){
+      arr.sort((a,b)=>{
+        const scoreA = (liveCountByGround[a.id]||0) * 5 + (nearbyActivityByGround[a.id]||0);
+        const scoreB = (liveCountByGround[b.id]||0) * 5 + (nearbyActivityByGround[b.id]||0);
+        return scoreB - scoreA || a.name.localeCompare(b.name);
+      });
+    } else if(nearbySortBy === 'newest'){
+      arr.sort((a,b)=>(b.createdAt || '').localeCompare(a.createdAt || ''));
+    } else {
+      arr.sort((a,b)=>a.name.localeCompare(b.name));
+    }
+    nearbyResults = arr;
+  }
+
+  async function runNearbySearch(){
+    nearbyLoading = true;
+    nearbyLoadError = '';
+    nearbySearchTournaments = [];
+    nearbySearchTeams = [];
+    renderNearby();
+    try{
+      let results = [];
+      if(nearbyMode === 'location' && nearbyCoords){
+        results = await fetchGroundsNear(nearbyCoords.latitude, nearbyCoords.longitude, nearbyRadiusKm, 50);
+      } else if(nearbyMode === 'search' && nearbySearchText.trim()){
+        const term = nearbySearchText.trim();
+        // Unified discovery search (brief section 22) — grounds/tournaments/
+        // teams in parallel, one round trip each, no AI.
+        const [groundHits, tourHits, teamHits] = await Promise.all([
+          searchGrounds(term, { limit: 50 }),
+          searchTournamentsByName(term, 10),
+          searchTeamsByName(term, 10)
+        ]);
+        results = groundHits;
+        nearbySearchTournaments = tourHits;
+        nearbySearchTeams = teamHits;
+      } else if(nearbyMode === 'city' && (nearbyCountryFilter || nearbyCityFilter)){
+        results = await fetchGroundsByFilter({ country: nearbyCountryFilter, city: nearbyCityFilter, limit: 50 });
+      }
+      nearbyResults = results;
+      const ids = results.map(g=>g.id);
+      // Real activity data only (brief section 12/22) — one batched query per
+      // data type for every ground currently on screen, never a fake number.
+      const [fixtures, live, tours] = ids.length
+        ? await Promise.all([
+            fetchUpcomingFixturesForGrounds(ids, 200),
+            fetchLiveMatchesForGrounds(ids),
+            fetchTournamentsForGrounds(ids, 30)
+          ])
+        : [[], [], []];
+      const counts = {};
+      fixtures.forEach(f=>{ counts[f.ground_id] = (counts[f.ground_id] || 0) + 1; });
+      nearbyActivityByGround = counts;
+      nearbyMatches = fixtures;
+      nearbyTournaments = tours;
+      nearbyTeamCounts = tours.length ? await fetchTeamCountsForTournaments(tours.map(t=>t.id)) : {};
+      applyNearbyLiveUpdate(live, { announce: true });
+      applyNearbySort();
+    }catch(err){
+      console.error('runNearbySearch failed:', err);
+      nearbyLoadError = 'Ground discovery is temporarily unavailable.';
+      nearbyResults = [];
+      nearbyMatches = [];
+      nearbyTournaments = [];
+      applyNearbyLiveUpdate([], { announce: false });
+    }finally{
+      nearbyLoading = false;
+      renderNearby();
+    }
+  }
+
+  /* Re-fetches just the live section for whatever grounds are already on
+     screen — used by the realtime subscription below, kept separate from
+     runNearbySearch() so a score update on an existing live match doesn't
+     re-run the (more expensive) grounds/fixtures/tournaments search. */
+  async function refreshNearbyLive(){
+    const ids = nearbyResults.map(g=>g.id);
+    if(!ids.length) return;
+    try{
+      const live = await fetchLiveMatchesForGrounds(ids);
+      applyNearbyLiveUpdate(live, { announce: true });
+      renderNearbyLive();
+    }catch(err){ console.error('refreshNearbyLive failed:', err); }
+  }
+
+  /* Small in-screen nudge (brief section 24's intent, without any of the
+     push-notification/audience-resolution risk — see the report for why
+     that part was deliberately not built this phase). Purely reactive to
+     data this client already legitimately fetched for a screen the user
+     has open right now; never fires on the very first load of a screen
+     visit (nearbyLiveLoadedOnce), only when a genuinely new match appears
+     while they're already looking at it. */
+  function applyNearbyLiveUpdate(live, { announce }){
+    if(announce && nearbyLiveLoadedOnce){
+      const prevIds = new Set(nearbyLive.map(r=>r.id));
+      const isNew = live.some(r=>!prevIds.has(r.id));
+      if(isNew) toast('🏏 A live match just started near you');
+    }
+    nearbyLive = live;
+    nearbyLiveLoadedOnce = true;
+  }
+
+  /* Lazy CDN load, cached — a failed attempt clears the cache so a later
+     retry (once connectivity returns) actually tries the network again
+     instead of replaying the same rejected promise forever. */
+  function ensureLeafletLoaded(){
+    if(window.L) return Promise.resolve();
+    if(leafletLoadPromise) return leafletLoadPromise;
+    leafletLoadPromise = new Promise((resolve, reject)=>{
+      const link = document.createElement('link');
+      link.rel = 'stylesheet';
+      link.href = 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css';
+      document.head.appendChild(link);
+      const script = document.createElement('script');
+      script.src = 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js';
+      script.onload = ()=>resolve();
+      script.onerror = ()=>reject(new Error('Map library failed to load'));
+      document.head.appendChild(script);
+    }).catch(err=>{ leafletLoadPromise = null; throw err; });
+    return leafletLoadPromise;
+  }
+
+  async function ensureNearbyMap(){
+    const el = $('nearbyMapEl');
+    if(!el) return null;
+    try{ await ensureLeafletLoaded(); }
+    catch(err){ console.error('ensureNearbyMap: map library failed to load', err); return null; }
+    if(nearbyMap){ nearbyMap.invalidateSize(); return nearbyMap; }
+    if(!window.L) return null;
+    nearbyMap = L.map(el, { zoomControl: true, attributionControl: true }).setView([20, 0], 2);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      maxZoom: 18,
+      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> contributors'
+    }).addTo(nearbyMap);
+    nearbyMarkersLayer = L.layerGroup().addTo(nearbyMap);
+    return nearbyMap;
+  }
+
+  /* Popup "View Ground" buttons are wired via Leaflet's own popupopen event,
+     not the app's document-level data-action delegation: Leaflet calls
+     L.DomEvent.disableClickPropagation() on popup content, which stops the
+     click before it would ever bubble up to document, so the normal
+     delegated handler would silently never fire here. */
+  async function renderNearbyMapMarkers(){
+    const withCoords = nearbyResults.filter(g=>g.latitude != null && g.longitude != null);
+    const mapCard = $('nearbyMapCard');
+    const mapEl = $('nearbyMapEl');
+    if(!mapCard || !mapEl) return;
+    if(!withCoords.length){ mapCard.classList.add('hidden'); return; }
+    mapCard.classList.remove('hidden');
+    const map = await ensureNearbyMap();
+    if(!map){
+      mapEl.innerHTML = `<div class="empty-note" style="margin:0;">Map could not be loaded. The list below still works.</div>`;
+      return;
+    }
+    if(screen !== 'nearby') return; // navigated away while Leaflet was loading
+    nearbyMarkersLayer.clearLayers();
+    const bounds = [];
+    withCoords.forEach(g=>{
+      const icon = L.divIcon({ html:'🏏', className:'ground-marker-icon', iconSize:[26,26] });
+      const marker = L.marker([g.latitude, g.longitude], { icon });
+      const dist = typeof g.distanceKm === 'number' ? fmtDistance(g.distanceKm) + ' away' : '';
+      marker.bindPopup(`
+        <div style="min-width:170px;">
+          <div style="font-weight:600;">${esc(g.name)}${g.verified ? ' &#10003;' : ''}</div>
+          <div class="stat-dim">${esc([g.city, g.country].filter(Boolean).join(', '))}</div>
+          ${dist ? `<div class="stat-dim">${esc(dist)}</div>` : ''}
+          <button class="btn secondary small" data-ground-view="${esc(g.id)}" style="margin-top:6px;">View Ground</button>
+        </div>
+      `);
+      marker.on('popupopen', (e)=>{
+        const el = e.popup.getElement();
+        const btn = el && el.querySelector('[data-ground-view]');
+        if(btn) btn.addEventListener('click', ()=>openGroundView(g.id));
+      });
+      marker.addTo(nearbyMarkersLayer);
+      bounds.push([g.latitude, g.longitude]);
+    });
+    if(nearbyCoords){
+      const youIcon = L.divIcon({ html:'📍', className:'you-marker-icon', iconSize:[26,26] });
+      nearbyUserMarker = L.marker([nearbyCoords.latitude, nearbyCoords.longitude], { icon: youIcon, zIndexOffset: 1000 })
+        .bindPopup('You are here');
+      nearbyUserMarker.addTo(nearbyMarkersLayer);
+      bounds.push([nearbyCoords.latitude, nearbyCoords.longitude]);
+    }
+    if(bounds.length === 1) map.setView(bounds[0], 13);
+    else if(bounds.length > 1) map.fitBounds(bounds, { padding: [30,30], maxZoom: 14 });
+  }
+
+  function renderNearbyLocationCard(){
+    const card = $('nearbyLocationCard');
+    if(!card) return;
+    if(nearbyLocStatus === 'granted' && nearbyCoords){
+      card.innerHTML = `<div class="stat-dim">📍 Using your current location &middot; <button data-action="nearby-request-location" style="background:none;border:none;color:var(--acc-2);cursor:pointer;text-decoration:underline;padding:0;font:inherit;">Refresh</button></div>`;
+      return;
+    }
+    if(nearbyLocStatus === 'requesting'){
+      card.innerHTML = `<div class="stat-dim">Getting your location&hellip;</div>`;
+      return;
+    }
+    if(nearbyLocStatus === 'denied' || nearbyLocStatus === 'unavailable'){
+      card.innerHTML = `
+        <div class="stat-dim">${esc(nearbyLocError || 'Location access is unavailable.')}</div>
+        <div class="row" style="margin-top:8px;gap:8px;flex-wrap:wrap;">
+          <button class="btn secondary small" data-action="nearby-request-location">Try Again</button>
+          <button class="btn secondary small" data-action="nearby-search-city">Search by City</button>
+        </div>`;
+      return;
+    }
+    card.innerHTML = `
+      <div style="font-weight:600;">📍 Find cricket grounds near you</div>
+      <div class="stat-dim">CricketConnect will ask to use your location just this once to find nearby grounds.</div>
+      <button class="btn" data-action="nearby-request-location" style="margin-top:8px;">Allow Location</button>`;
+  }
+
+  /* Real per-ground activity breakdown (brief section 12) — computed from
+     data already fetched for this screen (nearbyLive/nearbyMatches), never
+     a second query per ground and never an invented number. */
+  function nearbyGroundActivity(groundId){
+    const live = nearbyLive.filter(r=>r.groundId === groundId).length;
+    const today0 = new Date(); today0.setHours(0,0,0,0);
+    const tomorrow0 = new Date(today0.getTime() + 86400000);
+    const week0 = new Date(today0.getTime() + 7*86400000);
+    let today = 0, week = 0;
+    nearbyMatches.forEach(f=>{
+      if(f.ground_id !== groundId || !f.fixture_date) return;
+      const d = new Date(f.fixture_date);
+      if(d >= today0 && d < tomorrow0) today++;
+      if(d >= today0 && d < week0) week++;
+    });
+    return { live, today, week };
+  }
+  // brief section 13: "meaningful current/upcoming activity", not a fake
+  // popularity score. Rule, stated plainly: a live match always qualifies;
+  // otherwise at least this many matches in the coming 7 days.
+  const ACTIVE_GROUND_MIN_WEEKLY = 3;
+
+  function renderNearbyList(){
+    const box = $('nearbyListBox');
+    const heading = $('nearbyListHeading');
+    if(!box) return;
+    if(nearbyLoading){ box.innerHTML = skeletonRows(4); return; }
+    if(nearbyLoadError){
+      box.innerHTML = `<div class="empty-note">${esc(nearbyLoadError)}<br>
+        <button class="btn secondary small" data-action="nearby-retry">Try Again</button></div>`;
+      return;
+    }
+    if(!nearbyResults.length){
+      const tried = nearbyMode === 'location' ? !!nearbyCoords : (nearbyMode === 'search' ? !!nearbySearchText.trim() : !!(nearbyCountryFilter || nearbyCityFilter));
+      if(!tried){
+        box.innerHTML = `<div class="empty-note">Choose a city or enable location to discover nearby cricket.</div>`;
+        return;
+      }
+      const nextTier = NEARBY_RADIUS_TIERS[NEARBY_RADIUS_TIERS.indexOf(nearbyRadiusKm) + 1];
+      const expandBtn = (nearbyMode === 'location' && nextTier)
+        ? `<button class="btn secondary small" data-action="nearby-expand-radius">Expand to ${nextTier} km</button>` : '';
+      box.innerHTML = `<div class="empty-note">🏏 No cricket grounds found nearby.<br>
+        ${expandBtn}
+        <button class="btn secondary small" data-action="nearby-search-city">Search by City</button></div>`;
+      return;
+    }
+    if(heading) heading.textContent = nearbyMode === 'location' ? 'Nearby Grounds' : 'Grounds';
+    box.innerHTML = nearbyResults.map(g=>{
+      const meta = [g.city, g.country].filter(Boolean).join(', ') || 'Location not set';
+      const dist = typeof g.distanceKm === 'number' ? fmtDistance(g.distanceKm) + ' away' : '';
+      const act = nearbyGroundActivity(g.id);
+      const isActive = act.live > 0 || act.week >= ACTIVE_GROUND_MIN_WEEKLY;
+      const bits = [];
+      if(act.live) bits.push(`🔴 ${act.live} live`);
+      if(act.today) bits.push(`${act.today} today`);
+      else if(act.week) bits.push(`${act.week} this week`);
+      return `<button class="list-pick" data-action="open-ground" data-id="${esc(g.id)}" style="width:100%;text-align:left;background:none;border:none;border-bottom:1px solid var(--line);cursor:pointer;font-family:inherit;padding:10px 0;">
+        <div style="font-weight:600;">🏏 ${esc(g.name)}${g.verified ? ' &#10003;' : ''}${isActive ? ' &middot; <span style="color:var(--live);">🔥 Active</span>' : ''}</div>
+        <div class="stat-dim">${esc(meta)}${dist ? ' &middot; ' + esc(dist) : ''}${bits.length ? ' &middot; ' + esc(bits.join(' &middot; ')) : ''}</div>
+      </button>`;
+    }).join('');
+  }
+
+  /* "Live Near You" — top priority per brief section 8. Reuses
+     homeLiveCardHTML() (the exact card already shown on Home and Live Now),
+     just with an added distance note — same live-scoring data, same
+     live.html deep link, not a second live-score engine. */
+  function renderNearbyLive(){
+    const card = $('nearbyLiveCard');
+    const box = $('nearbyLiveBox');
+    if(!card || !box) return;
+    if(!nearbyLive.length){ card.classList.add('hidden'); return; }
+    card.classList.remove('hidden');
+    const byId = {};
+    nearbyResults.forEach(g=>{ byId[g.id] = g; });
+    box.innerHTML = `<div class="live-now-stack">` + nearbyLive.map(r=>{
+      const g = byId[r.groundId];
+      const dist = g && typeof g.distanceKm === 'number' ? fmtDistance(g.distanceKm) + ' away' : '';
+      return homeLiveCardHTML(r, { distanceNote: dist });
+    }).join('') + `</div>`;
+  }
+
+  // brief section 21: Today / Tomorrow / This Week / Weekend for v1 — a
+  // Custom range picker was left out to keep the first version simple (the
+  // brief explicitly asks for that), noted in the final report rather than
+  // silently dropped.
+  function nearbyDateFilterMatches(matches){
+    if(nearbyDateFilter === 'all') return matches;
+    const today0 = new Date(); today0.setHours(0,0,0,0);
+    const tomorrow0 = new Date(today0.getTime() + 86400000);
+    const dayAfter0 = new Date(today0.getTime() + 2*86400000);
+    const week0 = new Date(today0.getTime() + 7*86400000);
+    const dow = today0.getDay();
+    const satStart = new Date(today0.getTime() + ((6 - dow + 7) % 7) * 86400000);
+    const sunEnd = new Date(satStart.getTime() + 2*86400000);
+    return matches.filter(f=>{
+      if(!f.fixture_date) return false;
+      const d = new Date(f.fixture_date);
+      if(nearbyDateFilter === 'today') return d >= today0 && d < tomorrow0;
+      if(nearbyDateFilter === 'tomorrow') return d >= tomorrow0 && d < dayAfter0;
+      if(nearbyDateFilter === 'week') return d >= today0 && d < week0;
+      if(nearbyDateFilter === 'weekend') return d >= satStart && d < sunEnd;
+      return true;
+    });
+  }
+
+  // "Upcoming Near You" (brief section 7) — same honest scope as the
+  // previous phase: tournament + ground + when, not team names. Verified
+  // again this phase (see the report) that fixtures.team_a_id/team_b_id are
+  // ids into each tournament's own JSONB roster, not a globally resolvable
+  // id — showing a wrong or blank name would be worse than not showing one.
+  function renderNearbyMatches(){
+    const card = $('nearbyMatchesCard');
+    const box = $('nearbyMatchesBox');
+    if(!card || !box) return;
+    const filtered = nearbyDateFilterMatches(nearbyMatches);
+    if(!nearbyMatches.length){ card.classList.add('hidden'); return; }
+    card.classList.remove('hidden');
+    if(!filtered.length){
+      box.innerHTML = `<div class="empty-note">No upcoming matches found for this date range.</div>`;
+      return;
+    }
+    const byId = {};
+    nearbyResults.forEach(g=>{ byId[g.id] = g; });
+    box.innerHTML = filtered.slice(0, 10).map(f=>{
+      const g = byId[f.ground_id];
+      const dist = g && typeof g.distanceKm === 'number' ? fmtDistance(g.distanceKm) : '';
+      const tourName = (f.tournaments && f.tournaments.name) || 'Match';
+      return `<button class="list-pick" data-action="open-ground" data-id="${esc(f.ground_id)}" style="width:100%;text-align:left;background:none;border:none;border-bottom:1px solid var(--line);cursor:pointer;font-family:inherit;padding:10px 0;">
+        <div style="font-weight:600;">${esc(tourName)}</div>
+        <div class="stat-dim">${g ? esc(g.name) : 'Ground'}${dist ? ' &middot; ' + esc(dist) : ''} &middot; ${esc(fmtWhen(f.fixture_date, g ? g.timezone : null))}</div>
+      </button>`;
+    }).join('');
+  }
+
+  /* "Tournaments Near You" (brief section 10) — real tournaments.name/
+     status/start_date, real team/match counts from data already fetched
+     above (fetchTeamCountsForTournaments, nearbyMatches grouped by
+     tournament_id) — no duplicate tournament data, no invented counts. */
+  function renderNearbyTournaments(){
+    const card = $('nearbyTournamentsCard');
+    const box = $('nearbyTournamentsBox');
+    if(!card || !box) return;
+    if(!nearbyTournaments.length){ card.classList.add('hidden'); return; }
+    card.classList.remove('hidden');
+    const byId = {};
+    nearbyResults.forEach(g=>{ byId[g.id] = g; });
+    box.innerHTML = nearbyTournaments.map(t=>{
+      const g = byId[t.ground_id];
+      const dist = g && typeof g.distanceKm === 'number' ? fmtDistance(g.distanceKm) + ' away' : '';
+      const matchCount = nearbyMatches.filter(f=>f.tournament_id === t.id).length;
+      const teamCount = nearbyTeamCounts[t.id] || 0;
+      return `<button class="tour-card" data-action="open-tour" data-id="${esc(t.id)}" style="width:100%;text-align:left;font-family:inherit;">
+        ${dateChipHTML(t.start_date)}
+        <div class="tc-b">
+          <div class="tc-n">🏆 ${esc(t.name)}</div>
+          <div class="tc-m">${g ? esc(g.name) : ''}${dist ? ' &middot; ' + esc(dist) : ''}</div>
+          <div class="tc-m">${teamCount ? teamCount + ' team' + (teamCount === 1 ? '' : 's') + ' &middot; ' : ''}${matchCount} upcoming match${matchCount === 1 ? '' : 'es'}</div>
+        </div>
+        ${statusBadgeHTML(t.status || 'upcoming')}
+      </button>`;
+    }).join('');
+  }
+
+  /* "Active Teams Near You" (brief section 11) — derived only from teams
+     currently playing a LIVE match nearby, using the real teamA/teamB
+     strings live_matches.data already stores (engine.js's match model uses
+     plain team names throughout, not ids — unlike fixtures, there's no
+     resolution problem here at all). Deliberately not widened to upcoming
+     fixtures too: those only have tournament-scoped roster ids, same
+     limitation as the Upcoming section above. */
+  function renderNearbyTeams(){
+    const card = $('nearbyTeamsCard');
+    const box = $('nearbyTeamsBox');
+    if(!card || !box) return;
+    const names = new Set();
+    nearbyLive.forEach(r=>{
+      const m = r.match || {};
+      if(m.teamA) names.add(m.teamA);
+      if(m.teamB) names.add(m.teamB);
+    });
+    if(!names.size){ card.classList.add('hidden'); return; }
+    card.classList.remove('hidden');
+    box.innerHTML = [...names].map(n=>`<span class="roster-chip">🏏 ${esc(n)}</span>`).join('');
+  }
+
+  /* Unified search's two extra categories (brief section 22) — grounds
+     already flow through the normal nearbyResults/renderNearbyList path;
+     these render tournament/team name matches separately, without
+     attempting team/match counts that would require queries this simple
+     text search deliberately doesn't run (see runNearbySearch). */
+  function renderNearbySearchExtras(){
+    const tourWrap = $('nearbySearchTourWrap'), tourBox = $('nearbySearchTourBox');
+    const teamWrap = $('nearbySearchTeamWrap'), teamBox = $('nearbySearchTeamBox');
+    if(!tourWrap || !teamWrap) return;
+    const showTours = nearbyMode === 'search' && nearbySearchTournaments.length > 0;
+    const showTeams = nearbyMode === 'search' && nearbySearchTeams.length > 0;
+    tourWrap.classList.toggle('hidden', !showTours);
+    teamWrap.classList.toggle('hidden', !showTeams);
+    if(showTours){
+      tourBox.innerHTML = nearbySearchTournaments.map(t=>`
+        <button class="list-pick" data-action="open-tour" data-id="${esc(t.id)}" style="width:100%;text-align:left;background:none;border:none;border-bottom:1px solid var(--line);cursor:pointer;font-family:inherit;padding:10px 0;">
+          <div style="font-weight:600;">🏆 ${esc(t.name)}</div>
+          <div class="stat-dim">${esc(t.location || '')}</div>
+        </button>`).join('');
+    }
+    if(showTeams){
+      teamBox.innerHTML = nearbySearchTeams.map(tm=>`
+        <button class="list-pick" data-action="open-tour" data-id="${esc(tm.tournamentId)}" style="width:100%;text-align:left;background:none;border:none;border-bottom:1px solid var(--line);cursor:pointer;font-family:inherit;padding:10px 0;">
+          <div style="font-weight:600;">🏏 ${esc(tm.name)}</div>
+          <div class="stat-dim">${tm.tournamentName ? 'Plays in ' + esc(tm.tournamentName) : ''}</div>
+        </button>`).join('');
+    }
+  }
+
+  function renderNearby(){
+    renderNearbyLocationCard();
+
+    const modePills = $('nearbyModePills');
+    if(modePills) modePills.innerHTML = `
+      <button class="pill ${nearbyMode==='location'?'active':''}" data-action="nearby-mode" data-mode="location">📍 Near Me</button>
+      <button class="pill ${nearbyMode==='city'?'active':''}" data-action="nearby-mode" data-mode="city">🌍 City</button>
+      <button class="pill ${nearbyMode==='search'?'active':''}" data-action="nearby-mode" data-mode="search">🔎 Search</button>`;
+
+    const pills = $('nearbyRadiusPills');
+    if(pills) pills.innerHTML = (nearbyMode === 'location' && nearbyCoords) ? NEARBY_RADIUS_TIERS.map(km=>
+      `<button class="pill ${nearbyRadiusKm===km?'active':''}" data-action="nearby-radius" data-km="${km}">Within ${km} km</button>`).join('') : '';
+
+    const sortPills = $('nearbySortPills');
+    if(sortPills) sortPills.innerHTML = `
+      ${nearbyCoords ? `<button class="pill ${nearbySortBy==='distance'?'active':''}" data-action="nearby-sort" data-sort="distance">Nearest</button>` : ''}
+      <button class="pill ${nearbySortBy==='live'?'active':''}" data-action="nearby-sort" data-sort="live">Live Now</button>
+      <button class="pill ${nearbySortBy==='soon'?'active':''}" data-action="nearby-sort" data-sort="soon">Starting Soon</button>
+      <button class="pill ${nearbySortBy==='active'?'active':''}" data-action="nearby-sort" data-sort="active">Most Active</button>
+      <button class="pill ${nearbySortBy==='newest'?'active':''}" data-action="nearby-sort" data-sort="newest">Newest</button>
+      <button class="pill ${nearbySortBy==='alpha'?'active':''}" data-action="nearby-sort" data-sort="alpha">A&ndash;Z</button>`;
+
+    const datePills = $('nearbyDateFilterPills');
+    if(datePills) datePills.innerHTML = `
+      <button class="pill ${nearbyDateFilter==='all'?'active':''}" data-action="nearby-date-filter" data-filter="all">All Dates</button>
+      <button class="pill ${nearbyDateFilter==='today'?'active':''}" data-action="nearby-date-filter" data-filter="today">Today</button>
+      <button class="pill ${nearbyDateFilter==='tomorrow'?'active':''}" data-action="nearby-date-filter" data-filter="tomorrow">Tomorrow</button>
+      <button class="pill ${nearbyDateFilter==='week'?'active':''}" data-action="nearby-date-filter" data-filter="week">This Week</button>
+      <button class="pill ${nearbyDateFilter==='weekend'?'active':''}" data-action="nearby-date-filter" data-filter="weekend">Weekend</button>`;
+
+    const countryWrap = $('nearbyFilterWrap');
+    if(countryWrap) countryWrap.classList.toggle('hidden', nearbyMode !== 'city');
+    const countrySel = $('nearbyCountrySelect');
+    if(countrySel && countrySel.dataset.filled !== String(nearbyCountries.length)){
+      countrySel.innerHTML = `<option value="">All countries</option>` +
+        nearbyCountries.map(c=>`<option value="${esc(c.country)}" ${c.country===nearbyCountryFilter?'selected':''}>${esc(c.country)}</option>`).join('');
+      countrySel.dataset.filled = String(nearbyCountries.length);
+    }
+    const citySel = $('nearbyCitySelect');
+    if(citySel){
+      citySel.innerHTML = `<option value="">All cities</option>` +
+        nearbyCities.map(c=>`<option value="${esc(c)}" ${c===nearbyCityFilter?'selected':''}>${esc(c)}</option>`).join('');
+    }
+    renderNearbyLive();
+    renderNearbyList();
+    renderNearbyMatches();
+    renderNearbyTournaments();
+    renderNearbyTeams();
+    renderNearbySearchExtras();
+    renderNearbyMapMarkers();
+
+    // Realtime: subscribe once per visit to this screen (mirrors
+    // renderLiveNow()'s own liveNowUnsub pattern exactly), torn down in
+    // render()'s screen-teardown block below when the user leaves.
+    if(!nearbyLiveUnsub){
+      nearbyLiveUnsub = watchAllLiveMatches(()=>{ if(screen === 'nearby') refreshNearbyLive(); });
+    }
+  }
+
+  /* =========================================================================
+     ADMIN: GROUNDS — GROUND 17. Same sectioned-tab shape as every other
+     admin area (adminTab + renderAdminX(), see renderAdmin()'s dispatch
+     above): view, search, verify, deactivate, delete. No new admin app, no
+     new ownership model — plain .update()/.delete() calls, since the RLS
+     policy already grants an admin full write access to any ground (see
+     supabase_ground_location_migration.sql).
+     ========================================================================= */
+
+  async function loadAdminGrounds(){
+    adminGroundsLoading = true;
+    renderAdminGrounds();
+    try{
+      adminGrounds = await adminFetchGrounds({ search: adminGroundSearch, max: 200 });
+    }catch(err){
+      console.error('loadAdminGrounds failed:', err);
+      adminGrounds = [];
+    }finally{
+      adminGroundsLoading = false;
+      adminGroundsLoaded = true;
+      renderAdminGrounds();
+    }
+  }
+
+  function renderAdminGrounds(){
+    const box = $('adminGroundsList');
+    if(!box) return;
+    if(!adminGroundsLoaded && !adminGroundsLoading){ loadAdminGrounds(); return; }
+    if(adminGroundsLoading){ box.innerHTML = skeletonRows(4); return; }
+    if(!adminGrounds.length){ box.innerHTML = `<div class="empty-note">No grounds found.</div>`; return; }
+    box.innerHTML = adminGrounds.map(g => `
+      <div class="card">
+        <div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;">
+          <div>
+            <div style="font-weight:600;">🏏 ${esc(g.name)}${g.verified ? ' &#10003; Verified' : ''}${g.active === false ? ' &middot; <span style="color:var(--danger,#e4322a);">Inactive</span>' : ''}</div>
+            <div class="stat-dim">${esc([g.city, g.country].filter(Boolean).join(', ') || 'No location')}${g.latitude != null ? ' · has coordinates' : ' · no coordinates'}${g.timezone ? ' · ' + esc(g.timezone) : ''}</div>
+          </div>
+        </div>
+        <div class="row" style="margin-top:8px;flex-wrap:wrap;gap:6px;">
+          <button class="btn secondary small" data-action="open-ground" data-id="${esc(g.id)}">View</button>
+          <button class="btn secondary small" data-action="admin-ground-toggle-verified" data-id="${esc(g.id)}" data-verified="${g.verified ? '1' : '0'}">${g.verified ? 'Unverify' : 'Verify'}</button>
+          <button class="btn secondary small" data-action="admin-ground-toggle-active" data-id="${esc(g.id)}" data-active="${g.active === false ? '0' : '1'}">${g.active === false ? 'Reactivate' : 'Deactivate'}</button>
+          <button class="btn secondary small" data-action="admin-ground-check-dupes" data-id="${esc(g.id)}">Check Duplicates</button>
+          <button class="btn secondary small" data-action="admin-ground-delete" data-id="${esc(g.id)}">Delete</button>
+        </div>
+      </div>`).join('');
+  }
+
+  /* Nearby Grounds & Maps phase — brief section 40 "review duplicate
+     candidates". Reuses findPossibleDuplicateGrounds() exactly as written
+     for the ground-picker's create-time dupe check (GROUND 16); the only
+     difference is filtering the ground's own id back out of its own
+     results, since that function was designed to check a not-yet-created
+     draft against existing grounds, not an existing ground against itself.
+     Never merges automatically here either — admin still reviews and acts
+     manually (verify/deactivate/delete), same as every other admin action
+     in this section. */
+  async function adminGroundCheckDuplicates(id){
+    const g = adminGrounds.find(x=>x.id === id);
+    if(!g) return;
+    const dupes = (await findPossibleDuplicateGrounds(g.name, g.latitude, g.longitude)).filter(d=>d.id !== id);
+    if(!dupes.length){ toast('No likely duplicates found'); return; }
+    openModal(`
+      <h3>Possible duplicates of "${esc(g.name)}"</h3>
+      <div style="max-height:260px;overflow-y:auto;margin:10px 0;">
+        ${dupes.map(d=>`<div class="list-pick" style="cursor:default;">
+          <div style="font-weight:600;">🏏 ${esc(d.name)}${d.verified ? ' &#10003;' : ''}</div>
+          <div class="stat-dim">${esc([d.city, d.country].filter(Boolean).join(', '))}${typeof d.distanceKm === 'number' ? ' &middot; ' + esc(fmtDistance(d.distanceKm)) + ' away' : ''}</div>
+        </div>`).join('')}
+      </div>
+      <div class="stat-dim">Review manually — grounds are never merged automatically. Use Verify/Deactivate/Delete above once you've decided.</div>
+      <button class="btn secondary" data-action="close">Close</button>
+    `);
+  }
+
+  async function adminGroundToggleVerified(id, currentlyVerified){
+    const ok = await adminSetGroundVerified(id, !currentlyVerified);
+    if(!ok){ toast('Could not update — try again'); return; }
+    await loadAdminGrounds();
+    toast(currentlyVerified ? 'Ground unverified' : 'Ground verified');
+  }
+
+  async function adminGroundToggleActive(id, currentlyActive){
+    const ok = await adminSetGroundActive(id, !currentlyActive);
+    if(!ok){ toast('Could not update — try again'); return; }
+    await loadAdminGrounds();
+    toast(currentlyActive ? 'Ground deactivated' : 'Ground reactivated');
+  }
+
+  async function adminGroundDeleteAction(id){
+    // No custom confirm modal for this yet — window.confirm is a deliberately
+    // small, honest choice here rather than building new UI for a rare admin
+    // action; matches this being the only destructive one-tap admin action
+    // in this section (verify/deactivate are both reversible).
+    if(!window.confirm('Delete this ground permanently? Matches/tournaments that reference it keep their free-text venue but lose the link. This cannot be undone.')) return;
+    const ok = await adminDeleteGround(id);
+    if(!ok){ toast('Could not delete — try again'); return; }
+    await loadAdminGrounds();
+    toast('Ground deleted');
+  }
+
   document.addEventListener('click', async (e)=>{
     const fill = e.target.closest('[data-fill]');
     if(fill){
@@ -5998,6 +7350,7 @@ function bind(){
       const item = QA.find(x=>x.id === qa.dataset.qa);
       if(item){
         if(item.act === 'schedule') openScheduleModal();
+        else if(item.act === 'nearby') openNearby();
         else if(item.go){ if(item.go === 'setup') setupPrefill = null; go(item.go); }
       }
       return;
@@ -6059,6 +7412,66 @@ function bind(){
     else if(a === 'play-fixture') playFixture(el.dataset.id);
     else if(a === 'set-fixture-date') openFixtureDateModal(el.dataset.id);
     else if(a === 'save-fixture-date') saveFixtureDate(el.dataset.id);
+    // Ground picker (GROUND 8/9/10/16) — one shared modal, opened from four
+    // different entry points (see openXGroundPicker() functions below).
+    else if(a === 'gp-select'){
+      const found = (gpState && [...gpState.results, ...gpState.dupes].find(g => g.id === el.dataset.id)) || null;
+      if(found) pickGround(found);
+    }
+    else if(a === 'gp-use-location') gpUseLocation();
+    else if(a === 'gp-confirm-location'){ if(gpState){ gpState.step = 'create'; renderGroundPicker(); } }
+    else if(a === 'gp-cancel-location'){ if(gpState){ gpState.detected = null; gpState.step = 'search'; renderGroundPicker(); } }
+    else if(a === 'gp-clear-location'){ if(gpState){ gpState.detected = null; renderGroundPicker(); } }
+    else if(a === 'gp-create-new'){ if(gpState){ gpState.step = 'create'; gpState.draft.name = gpState.query || gpState.draft.name; renderGroundPicker(); } }
+    else if(a === 'gp-confirm-create') gpConfirmCreate();
+    else if(a === 'gp-create-anyway') gpActuallyCreate();
+    else if(a === 'gp-back-to-create'){ if(gpState){ gpState.step = 'create'; renderGroundPicker(); } }
+    else if(a === 'gp-back-to-search'){ if(gpState){ gpState.step = 'search'; renderGroundPicker(); if(gpState.query) runGroundSearch(gpState.query); } }
+    // The four entry points that open the ground picker against a specific form
+    else if(a === 'ev-select-ground') evSelectGround();
+    else if(a === 'setup-select-ground') setupSelectGround();
+    else if(a === 'fx-select-ground') fxSelectGround(el.dataset.id);
+    else if(a === 'tour-select-ground') tourSelectGround();
+    // Ground Detail screen (GROUND 13/14/22)
+    else if(a === 'open-ground') openGroundView(el.dataset.id);
+    else if(a === 'ground-directions') groundDirections(el.dataset.id);
+    else if(a === 'ground-share') groundShare(el.dataset.id);
+    else if(a === 'ground-view-matches'){ go('tournaments'); }
+    else if(a === 'go-home') go('home');
+    else if(a === 'admin-ground-toggle-verified') adminGroundToggleVerified(el.dataset.id, el.dataset.verified === '1');
+    else if(a === 'admin-ground-toggle-active') adminGroundToggleActive(el.dataset.id, el.dataset.active === '1');
+    else if(a === 'admin-ground-check-dupes') adminGroundCheckDuplicates(el.dataset.id);
+    else if(a === 'admin-ground-delete') adminGroundDeleteAction(el.dataset.id);
+    // Cricket Near You (Nearby Grounds & Maps phase)
+    else if(a === 'nearby-request-location') nearbyRequestLocation();
+    else if(a === 'nearby-radius'){ nearbyRadiusKm = parseInt(el.dataset.km, 10) || 25; runNearbySearch(); }
+    else if(a === 'nearby-expand-radius') nearbyExpandRadius();
+    else if(a === 'nearby-retry'){ if(nearbyMode === 'location') nearbyRequestLocation(); else runNearbySearch(); }
+    else if(a === 'nearby-search-city'){
+      nearbyMode = 'search';
+      const inp = $('nearbySearchInput');
+      if(inp) inp.focus();
+    }
+    else if(a === 'nearby-sort'){ nearbySortBy = el.dataset.sort; applyNearbySort(); renderNearby(); }
+    // Local Cricket Discovery — Near Me / City / Search mode toggle (brief
+    // section 4) and the Upcoming section's date filter (section 21).
+    else if(a === 'nearby-mode'){
+      const mode = el.dataset.mode;
+      if(mode === 'location'){
+        if(nearbyCoords){ nearbyMode = 'location'; runNearbySearch(); }
+        else nearbyRequestLocation();
+      } else if(mode === 'city'){
+        nearbyMode = 'city';
+        renderNearby();
+        if(nearbyCountryFilter || nearbyCityFilter) runNearbySearch();
+      } else if(mode === 'search'){
+        nearbyMode = 'search';
+        renderNearby();
+        const inp = $('nearbySearchInput');
+        if(inp) inp.focus();
+      }
+    }
+    else if(a === 'nearby-date-filter'){ nearbyDateFilter = el.dataset.filter; renderNearby(); }
     else if(a === 'gen-knockout') genKnockout();
     else if(a === 'regen-fixtures') regenFixtures();
     else if(a === 'delete-tour') removeTournament();
@@ -6267,6 +7680,10 @@ async function boot(){
   const params = new URLSearchParams(location.search);
   const deep = params.get('go');
   const tourDeep = params.get('tour');
+  // ?ground=<id> — shareable ground link (GROUND 13/22), same "works for
+  // guests" shape as ?tour= above: viewing a ground's public page never
+  // required an account either.
+  const groundDeep = params.get('ground');
   // ?player=<uid> — the other notification deep link that needs an id
   // rather than a fixed screen name (see buildDeepLink() in
   // supabase/functions/_shared/notify.ts). Same "works for guests" shape as
@@ -6277,6 +7694,11 @@ async function boot(){
   if(tourDeep){
     history.replaceState({}, '', location.pathname);
     openTournamentView(tourDeep); // sets its own loading state and calls render()
+    return;
+  }
+  if(groundDeep){
+    history.replaceState({}, '', location.pathname);
+    openGroundView(groundDeep); // sets its own loading state and calls render()
     return;
   }
   if(playerDeep){

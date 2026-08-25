@@ -191,14 +191,22 @@
     <div id="homeUpcomingTourBox"><div class="stat-dim">Loading…</div></div>
   </div>
 
-  <!-- ============ Cricket Near You — best-effort match between the
+  <!-- ============ Tournaments Near You — best-effort match between the
        signed-in user's own profile region/district (set on the Account
        screen, never a browser location prompt) and public tournaments'
        free-text location field. Hidden entirely for guests, for signed-in
        users with no region/district set, and whenever there's no match —
-       never shows a placeholder or invented "X km away" figure. ============ -->
+       never shows a placeholder or invented "X km away" figure.
+
+       Renamed from "Cricket Near You" (Nearby Grounds & Maps phase) — that
+       name now belongs to the real GPS/ground-coordinate screen reachable
+       from the qaNearby2 quick action below (see openNearby() in app.js).
+       This card's own mechanism, ids, and function names (renderCricketNear
+       You() etc.) were deliberately left untouched: only the visible title
+       changed, to remove the naming collision without touching a working,
+       already-tested feature. ============ -->
   <div class="card hidden" id="homeNearYouCard">
-    <div class="sec-head"><h2>Cricket Near You</h2></div>
+    <div class="sec-head"><h2>Tournaments Near You</h2></div>
     <div class="stat-dim" id="homeNearYouSub" style="margin:-6px 0 10px;"></div>
     <div id="homeNearYouBox"></div>
   </div>
@@ -413,6 +421,8 @@
     </div>
     <label>Venue (optional)</label>
     <input type="text" id="matchVenue" placeholder="e.g. Model Town Ground" maxlength="40" autocomplete="off">
+    <button type="button" class="btn secondary small" data-action="setup-select-ground" style="margin-top:6px;">📍 Select Ground</button>
+    <div class="stat-dim" id="setupGroundHint" style="color:var(--acc-2);margin-top:4px;"></div>
     <div class="toggle-line" style="margin-top:14px;">
       <div>
         <div style="font-size:14px;font-weight:600;">Share live</div>
@@ -670,6 +680,95 @@
 </div>
 
 <!-- ============================== LIVE NOW ============================== -->
+<!-- Ground Location Foundation (GROUND 13) — filled entirely by renderGround()
+     in app.js, same "plain container, JS owns the innerHTML" shape as the
+     admin screen. No fixed chrome here to keep in sync with what JS renders. -->
+<div id="screen-ground" class="hidden"></div>
+
+<!-- ============================== CRICKET NEAR YOU ============================== -->
+<!-- Nearby Grounds & Maps phase — static shell, unlike screen-ground/screen-admin
+     above (which are plain empty containers JS fully owns). This screen embeds a
+     persistent Leaflet map instance (see ensureNearbyMap() in app.js) that must
+     never have its container node destroyed mid-session by an innerHTML
+     replacement, so renderNearby() only ever touches the named sub-containers
+     below — #nearbyMapEl's own subtree belongs to Leaflet once it first loads. -->
+<div id="screen-nearby" class="hidden">
+  <div class="topbar">
+    <div class="brand">
+      <span class="brand-mark" data-brandmark></span>
+      <span class="brand-text">
+        <span class="brand-name">Cricket <b>Connect</b></span>
+        <span class="brand-sub">CRICKET NEAR YOU</span>
+      </span>
+    </div>
+  </div>
+
+  <div class="card" id="nearbyLocationCard"></div>
+
+  <!-- Local Cricket Discovery phase — Near Me / City / Search mode toggle
+       (brief section 4) drives which of the filter controls below are
+       relevant; renderNearby() shows/hides the country/city row accordingly.
+       The search input itself always stays available regardless of mode. -->
+  <div class="card" style="margin-bottom:10px;">
+    <div class="pill-row" id="nearbyModePills"></div>
+    <input type="text" id="nearbySearchInput" placeholder="Search grounds, teams, or tournaments&hellip;" style="margin-top:8px;" maxlength="80">
+    <div class="pill-row" id="nearbyRadiusPills" style="margin-top:8px;"></div>
+    <div class="row hidden" id="nearbyFilterWrap" style="margin-top:8px;gap:8px;">
+      <div style="flex:1;">
+        <label style="font-size:12px;color:var(--ink-dim);">Country</label>
+        <select id="nearbyCountrySelect"><option value="">All countries</option></select>
+      </div>
+      <div style="flex:1;">
+        <label style="font-size:12px;color:var(--ink-dim);">City</label>
+        <select id="nearbyCitySelect"><option value="">All cities</option></select>
+      </div>
+    </div>
+    <div class="pill-row" id="nearbySortPills" style="margin-top:8px;"></div>
+  </div>
+
+  <div class="card hidden" id="nearbyMapCard">
+    <div id="nearbyMapEl" style="height:280px;border-radius:12px;overflow:hidden;"></div>
+  </div>
+
+  <!-- Section order mirrors the brief's own priority (section 3/14):
+       live first, then upcoming, then tournaments, then grounds, then teams. -->
+  <div class="card hidden" id="nearbyLiveCard">
+    <div class="sec-head"><h2>🔴 Live Near You</h2></div>
+    <div id="nearbyLiveBox"></div>
+  </div>
+
+  <div class="card hidden" id="nearbyMatchesCard">
+    <div class="sec-head"><h2>📅 Upcoming Near You</h2></div>
+    <div class="pill-row" id="nearbyDateFilterPills" style="margin-bottom:8px;"></div>
+    <div id="nearbyMatchesBox"></div>
+  </div>
+
+  <div class="card hidden" id="nearbyTournamentsCard">
+    <div class="sec-head"><h2>🏆 Tournaments Near You</h2></div>
+    <div id="nearbyTournamentsBox"></div>
+  </div>
+
+  <div class="card hidden" id="nearbySearchTourWrap">
+    <div class="sec-head"><h2>🏆 Tournaments</h2></div>
+    <div id="nearbySearchTourBox"></div>
+  </div>
+
+  <div class="card" id="nearbyListCard">
+    <div class="sec-head"><h2 id="nearbyListHeading">Nearby Grounds</h2></div>
+    <div id="nearbyListBox"><div class="stat-dim">Search or share your location to find cricket grounds.</div></div>
+  </div>
+
+  <div class="card hidden" id="nearbyTeamsCard">
+    <div class="sec-head"><h2>👥 Active Teams Near You</h2></div>
+    <div id="nearbyTeamsBox"></div>
+  </div>
+
+  <div class="card hidden" id="nearbySearchTeamWrap">
+    <div class="sec-head"><h2>👥 Teams</h2></div>
+    <div id="nearbySearchTeamBox"></div>
+  </div>
+</div>
+
 <div id="screen-live-now" class="hidden">
   <div class="topbar">
     <div class="brand">
@@ -1161,6 +1260,7 @@
     <button class="pill" data-atab="feedback">Feedback</button>
     <button class="pill" data-atab="notifications">Notifications</button>
     <button class="pill" data-atab="activity">Activity</button>
+    <button class="pill" data-atab="grounds">Grounds</button>
   </div>
 
   <!-- Overview -->
@@ -1368,6 +1468,14 @@
       <div class="stat-dim">Recently created and recently reviewed items across the platform, most recent first.</div>
     </div>
     <div id="adminActivityList"></div>
+  </div>
+
+  <!-- Grounds (GROUND 17) -->
+  <div id="adminTabGrounds" class="hidden">
+    <div class="card">
+      <input type="text" id="adminGroundSearch" placeholder="Search grounds by name, city or country…" autocomplete="off">
+    </div>
+    <div id="adminGroundsList"></div>
   </div>
 </div>
 
