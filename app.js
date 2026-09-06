@@ -25,6 +25,7 @@ import {
 import { AVATARS, DEFAULT_AVATAR, avatarSVG, initialsBadge, brandMark, brandLockup } from './avatars.js';
 import { resolveTeamLogoMarkup, loadTeamLogoImage } from './team-logos.js';
 import { reportBallEvents, reportMatchComplete } from './broadcast-events.js';
+import { showFlashPop } from './flash-pop.js';
 import { TEMPLATES, buildOverlayState, templateThumbnailSVG } from './overlays.js';
 import * as recorder from './recorder.js';
 
@@ -3409,6 +3410,16 @@ function snapshotStriker(m){
   return { ref, name: ref.name, runsBefore: ref.runs, nonStrikerName: nonRef ? nonRef.name : null };
 }
 function afterBall(res, ball, strikerSnap){
+  // Six/four/wicket flash -- fires for the scorer immediately, straight off
+  // the ball just recorded (every run/extra/wicket entry point funnels
+  // through here). The public live.html viewer can't hook an action like
+  // this since it only ever receives data updates, so it uses
+  // checkBallForFlash() to detect the same thing by diffing instead.
+  if(ball){
+    if(ball.isWicket) showFlashPop('wicket');
+    else if(ball.batRuns === 6) showFlashPop('six');
+    else if(ball.batRuns === 4) showFlashPop('four');
+  }
   if(ball && strikerSnap){
     // Who actually got dismissed isn't always whoever faced the ball — a
     // run out can end the non-striker's innings instead. Both names are

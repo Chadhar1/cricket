@@ -1723,3 +1723,68 @@ select:focus-visible,textarea:focus-visible,[tabindex]:focus-visible{
 @media (min-width:430px){
   .sb-score{font-size:48px;}
 }
+
+/* ===========================================================================
+   SIX / FOUR / WICKET FLASH POP  (flash-pop.js)
+   A brief full-screen colour pulse + bouncing label, styled after the flash
+   cards on Google's live cricket score widget. Fixed + pointer-events:none
+   so it never blocks taps underneath, and it removes itself from the DOM
+   (see flash-pop.js), so no cleanup is needed here beyond the animations.
+   =========================================================================== */
+.flash-pop{
+  position:fixed; inset:0; z-index:9999;
+  display:flex; align-items:center; justify-content:center;
+  pointer-events:none;
+  overflow:hidden;
+}
+.flash-pop::before{
+  content:''; position:absolute; inset:0;
+  animation:flashPopScreen 700ms ease-out forwards;
+}
+.flash-pop-burst{
+  position:absolute; width:140px; height:140px; border-radius:50%;
+  animation:flashPopBurst 900ms ease-out forwards;
+}
+.flash-pop-label{
+  position:relative;
+  font-size:clamp(44px, 12vw, 76px); font-weight:900; letter-spacing:2px;
+  text-transform:uppercase;
+  animation:flashPopLabel 1200ms cubic-bezier(.2,1.4,.4,1) forwards;
+  text-shadow:0 4px 26px rgba(0,0,0,.6);
+}
+
+.flash-pop-six .flash-pop-label{ color:var(--cc-lime); }
+.flash-pop-six .flash-pop-burst{ background:radial-gradient(circle, rgba(164,248,81,.55), transparent 70%); }
+.flash-pop-six::before{ background:radial-gradient(circle, rgba(164,248,81,.30), transparent 65%); }
+
+.flash-pop-four .flash-pop-label{ color:var(--cc-cyan); }
+.flash-pop-four .flash-pop-burst{ background:radial-gradient(circle, rgba(89,195,248,.5), transparent 70%); }
+.flash-pop-four::before{ background:radial-gradient(circle, rgba(89,195,248,.26), transparent 65%); }
+
+.flash-pop-wicket .flash-pop-label{ color:var(--cc-danger); }
+.flash-pop-wicket .flash-pop-burst{ background:radial-gradient(circle, rgba(212,42,34,.5), transparent 70%); }
+.flash-pop-wicket::before{ background:radial-gradient(circle, rgba(212,42,34,.24), transparent 65%); }
+
+@keyframes flashPopScreen{
+  0%{ opacity:0; }
+  18%{ opacity:1; }
+  100%{ opacity:0; }
+}
+@keyframes flashPopBurst{
+  0%{ transform:scale(.2); opacity:.9; }
+  100%{ transform:scale(7); opacity:0; }
+}
+@keyframes flashPopLabel{
+  0%{ transform:scale(.4) rotate(-6deg); opacity:0; }
+  30%{ transform:scale(1.18) rotate(2deg); opacity:1; }
+  45%{ transform:scale(.96) rotate(-1deg); }
+  60%{ transform:scale(1.05) rotate(0deg); }
+  80%{ transform:scale(1) rotate(0deg); opacity:1; }
+  100%{ transform:scale(1.06) rotate(0deg); opacity:0; }
+}
+
+@media (prefers-reduced-motion:reduce){
+  .flash-pop, .flash-pop-burst, .flash-pop-label, .flash-pop::before{
+    animation-duration:.001ms !important;
+  }
+}

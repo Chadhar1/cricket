@@ -95,6 +95,7 @@ import { watchLiveMatch } from './cloud.js';
 import { isConfigured } from './supabase-config.js';
 import { fmtOvers, runRate, bowlerEcon, strikeRate } from './engine.js';
 import { brandMark } from './avatars.js';
+import { checkBallForFlash } from './flash-pop.js';
 
 const $ = (id)=>document.getElementById(id);
 document.getElementById('liveBrandMark').innerHTML = brandMark(34);
@@ -124,6 +125,7 @@ function render(m){
   $('liveBox').classList.remove('hidden');
 
   const inn = m.innings[m.currentInningsIdx];
+  checkBallForFlash(inn);
 
   $('sbTeams').textContent = teamNameOf(m, inn.battingTeam) + ' vs ' + teamNameOf(m, inn.bowlingTeam);
   $('sbScore').innerHTML = inn.runs + '<span>/' + inn.wickets + '</span>';
