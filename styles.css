@@ -1788,3 +1788,45 @@ select:focus-visible,textarea:focus-visible,[tabindex]:focus-visible{
     animation-duration:.001ms !important;
   }
 }
+
+/* ===========================================================================
+   RECORD MATCH — broadcast template picker
+   Compact, horizontally-scrollable cards (renderTemplateCards() in app.js).
+   Selected state is shown three ways at once, not by colour alone: a
+   brighter border + glow, a "&#10003; Selected" badge that only exists in the
+   DOM when selected, and the button's own aria-pressed attribute.
+   =========================================================================== */
+.rm-tpl-row{
+  display:flex; gap:10px; overflow-x:auto; -webkit-overflow-scrolling:touch;
+  padding:4px 2px 10px; margin:0 0 4px; scroll-snap-type:x proximity;
+}
+.rm-tpl-card{
+  flex:0 0 auto; width:132px; min-height:44px;
+  display:flex; flex-direction:column; align-items:stretch; gap:6px;
+  padding:8px; border-radius:12px;
+  border:2px solid var(--cc-border, var(--line));
+  background:var(--bg-1); color:inherit; font:inherit; text-align:left; cursor:pointer;
+  scroll-snap-align:start; position:relative;
+  transition:transform .15s ease, border-color .15s ease, box-shadow .15s ease, background .15s ease;
+}
+.rm-tpl-card:active{ transform:scale(.97); }
+.rm-tpl-card.sel{
+  border-color:var(--cc-cyan, var(--gold));
+  box-shadow:0 0 0 1px var(--cc-cyan, var(--gold)), 0 10px 20px -12px rgba(0,0,0,.65);
+  transform:translateY(-2px);
+  background:var(--bg-3);
+}
+.rm-tpl-check{
+  position:absolute; top:6px; right:6px; z-index:2;
+  background:var(--cc-lime, var(--gold)); color:#0A2010;
+  font-size:9px; font-weight:800; letter-spacing:.3px;
+  padding:2px 7px; border-radius:999px;
+}
+.rm-tpl-thumb{ display:block; border-radius:8px; overflow:hidden; line-height:0; }
+.rm-tpl-thumb svg{ display:block; width:100%; height:auto; }
+.rm-tpl-name{ font-size:12.5px; font-weight:700; }
+.rm-tpl-blurb{ font-size:10.5px; color:var(--ink-dim); line-height:1.3; }
+
+@media (max-width:360px){
+  .rm-tpl-card{ width:112px; }
+}

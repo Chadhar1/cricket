@@ -168,6 +168,7 @@ export function hasMicTrack(){ return !!micTrack; }
 export function setMicEnabled(enabled){ if(micTrack) micTrack.enabled = !!enabled; }
 
 export function stopCameraPreview(){
+  if(!isRecording()) stopCompositing(); // never tear down the compositor mid-recording
   if(cameraStream){
     cameraStream.getTracks().forEach(t=>t.stop());
     cameraStream = null;
@@ -254,6 +255,41 @@ export function getElapsedMs(){
 export function setActiveTemplate(id){ currentTemplateId = id; }
 export function getActiveTemplate(){ return currentTemplateId; }
 
+/* ---------------------------------------------------------------------------
+   Compositing (live preview, pre-recording).
+   ---------------------------------------------------------------------------
+   Originally the composite canvas + draw loop only existed once
+   startRecording() had been called, so the "Continue" screen (camera open,
+   not yet recording) showed the raw camera feed with no overlay at all —
+   the organizer couldn't actually see what a template looked like until
+   they'd already committed to hitting Record. startCompositing() lets the
+   caller (app.js) start the exact same draw loop the moment the camera
+   opens, so template switching and the live preview both work before
+   recording starts, not just during it. startRecording() below reuses
+   whatever canvas is already running here instead of creating a second one,
+   so there's no flicker/restart at the moment recording actually begins. */
+export function startCompositing({ templateId = 'classic', getOverlayState, width = 1280, height = 720 } = {}){
+  if(!previewVideoEl) throw new Error('Call openCameraPreview() before startCompositing().');
+  currentTemplateId = templateId;
+  getOverlayStateFn = getOverlayState;
+  if(!compositeCanvas){
+    compositeCanvas = document.createElement('canvas');
+    compositeCanvas.width = width;
+    compositeCanvas.height = height;
+    compositeCtx = compositeCanvas.getContext('2d');
+  }
+  if(!rafId) runCompositeLoop();
+}
+
+/* Only tears down the draw loop/canvas — never call this while a recording
+   is in progress (isRecording() guards the one call site that could race
+   this, in stopCameraPreview()). */
+export function stopCompositing(){
+  if(rafId){ cancelAnimationFrame(rafId); rafId = null; }
+  compositeCanvas = null;
+  compositeCtx = null;
+}
+
 /* opts = { templateId, getOverlayState, width, height, fps }
    getOverlayState is a zero-arg function supplied by the caller (app.js)
    that returns the current overlays.js buildOverlayState() result plus
@@ -270,10 +306,18 @@ export function startRecording({ templateId = 'classic', getOverlayState, width 
   activeEvent = null;
   pausedAccumMs = 0;
 
-  compositeCanvas = document.createElement('canvas');
-  compositeCanvas.width = width;
-  compositeCanvas.height = height;
-  compositeCtx = compositeCanvas.getContext('2d');
+  // Reuse the canvas already running from startCompositing() (the normal
+  // path — app.js starts compositing as soon as the camera opens) so
+  // recording begins on the exact same canvas the organizer has been
+  // looking at, with no visible restart. Only create a fresh one here as a
+  // fallback for a caller that jumps straight to startRecording() without
+  // going through the preview step first.
+  if(!compositeCanvas){
+    compositeCanvas = document.createElement('canvas');
+    compositeCanvas.width = width;
+    compositeCanvas.height = height;
+    compositeCtx = compositeCanvas.getContext('2d');
+  }
 
   // Subscribe to the ball-by-ball event stream only while actually
   // recording — the event adapter (broadcast-events.js) has no idea a
@@ -297,7 +341,7 @@ export function startRecording({ templateId = 'classic', getOverlayState, width 
 
   mediaRecorder.start(1000); // 1s timeslice — see the memory note at the top of this file
   recordingStartedAt = Date.now();
-  runCompositeLoop();
+  if(!rafId) runCompositeLoop(); // already running if startCompositing() was used, per the reuse note above
   emitTick();
   return { mimeType: mediaRecorder.mimeType || mimeType };
 }

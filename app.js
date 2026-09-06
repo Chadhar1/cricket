@@ -3575,6 +3575,27 @@ function rmResolveTeams(){
   return { tour, teamAObj, teamBObj };
 }
 
+/* Compact, horizontally-scrollable template picker shared by all three
+   Record Match screens (setup, camera-ready, and recording-in-progress) so
+   the preview and the picker never drift apart — one markup source, one
+   thumbnail source (overlays.js's templateThumbnailSVG, the SAME function
+   whose colour language mirrors the real drawXxx() renderers). Selected
+   state is shown three ways at once (border+glow, a checkmark badge that
+   only exists in the DOM when selected, and aria-pressed) rather than by
+   colour alone. */
+function renderTemplateCards(){
+  return `<div class="rm-tpl-row" id="rmTemplateGrid">
+    ${TEMPLATES.map(t=>`
+      <button type="button" class="rm-tpl-card${t.id === RM.templateId ? ' sel' : ''}"
+        data-action="rm-pick-template" data-id="${t.id}" aria-pressed="${t.id === RM.templateId}">
+        ${t.id === RM.templateId ? '<span class="rm-tpl-check">&#10003; Selected</span>' : ''}
+        <span class="rm-tpl-thumb">${templateThumbnailSVG(t.id, 130)}</span>
+        <span class="rm-tpl-name">${esc(t.name)}</span>
+        <span class="rm-tpl-blurb">${esc(t.blurb)}</span>
+      </button>`).join('')}
+  </div>`;
+}
+
 function openRecordModal(){
   if(!match || matchLocked(match)){ toast('Start or resume a live match first'); return; }
   if(!recorder.isCameraSupported()){
@@ -3583,28 +3604,20 @@ function openRecordModal(){
       <button class="btn secondary" data-action="close" style="margin-top:16px;">Close</button>`);
     return;
   }
-  RM = { templateId:'classic', audioEnabled:true, capabilities:null, qualityOptions:[], quality:null, multiCamera:false, summary:null, objectUrl:null };
+  RM = { templateId:'classic', audioEnabled:true, capabilities:null, qualityOptions:[], quality:null, multiCamera:false, summary:null, objectUrl:null, getOverlayState:null };
   renderRecordSetup();
 }
 
 async function renderRecordSetup(){
   const storage = await recorder.getStorageEstimate();
   const low = storage.supported && storage.estimatedMinutes < recorder.LOW_STORAGE_MINUTES_WARNING;
-  const activeT = TEMPLATES.find(t=>t.id === RM.templateId) || TEMPLATES[0];
   openModal(`
     <h3>🎥 Record Match</h3>
     <div class="stat-dim" style="margin-bottom:12px;">Records with your camera and saves straight to this device. Nothing is uploaded or streamed — the scoreboard is burned into the saved video itself, not a floating on-screen layer.</div>
     ${storage.supported ? `<div class="stat-dim" style="margin-bottom:12px;${low ? 'color:var(--live);' : ''}">${low ? '⚠ Low storage — roughly' : 'Estimated capacity: about'} ${Math.max(0, Math.round(storage.estimatedMinutes))} min of recording left on this device.</div>` : ''}
     <label>Broadcast template</label>
-    <div id="rmTemplateGrid" class="chip-row" style="flex-wrap:wrap;gap:10px;margin-bottom:10px;">
-      ${TEMPLATES.map(t=>`
-        <div class="chip${t.id === RM.templateId ? ' sel' : ''}" data-action="rm-pick-template" data-id="${t.id}" style="display:flex;flex-direction:column;align-items:center;gap:6px;padding:8px;cursor:pointer;">
-          ${templateThumbnailSVG(t.id, 110)}
-          <b style="font-size:12px;">${esc(t.name)}</b>
-        </div>`).join('')}
-    </div>
-    <div class="stat-dim" id="rmTemplateBlurb" style="margin-bottom:14px;">${esc(activeT.blurb)}</div>
-    <label style="display:flex;align-items:center;gap:8px;cursor:pointer;">
+    ${renderTemplateCards()}
+    <label style="display:flex;align-items:center;gap:8px;cursor:pointer;margin-top:14px;">
       <input type="checkbox" id="rmAudioToggle" ${RM.audioEnabled ? 'checked' : ''}> Record microphone audio
     </label>
     <div class="action-row" style="margin-top:16px;">
@@ -3616,15 +3629,16 @@ async function renderRecordSetup(){
 
 function rmPickTemplate(id){
   RM.templateId = id;
-  if(recorder.isRecording()){
-    recorder.setActiveTemplate(id); // live switch — safe mid-recording, see overlays.js
-  }
+  // Safe to call regardless of whether a recording is in progress, or even
+  // whether the camera/compositor exists yet at all (setActiveTemplate()
+  // just records the id) -- this is what makes the same picker markup work
+  // unmodified across all three Record Match screens.
+  recorder.setActiveTemplate(id);
+  // Re-render just the grid in place, rather than the whole modal, so
+  // switching templates never disturbs the mounted camera/canvas preview
+  // sitting elsewhere in the same modal.
   const grid = $('rmTemplateGrid');
-  if(grid){
-    grid.querySelectorAll('[data-action="rm-pick-template"]').forEach(el=>el.classList.toggle('sel', el.dataset.id === id));
-    const blurb = $('rmTemplateBlurb');
-    if(blurb) blurb.textContent = (TEMPLATES.find(t=>t.id === id) || TEMPLATES[0]).blurb;
-  }
+  if(grid) grid.outerHTML = renderTemplateCards();
 }
 
 async function rmContinueToCamera(){
@@ -3640,6 +3654,21 @@ async function rmContinueToCamera(){
       const devices = await navigator.mediaDevices.enumerateDevices();
       RM.multiCamera = devices.filter(d=>d.kind === 'videoinput').length > 1;
     }catch(e){ RM.multiCamera = false; }
+
+    // Overlay state (team names/logos/tournament) resolved once here rather
+    // than at rmStartRecording() time, so the exact same getOverlayState
+    // closure can feed BOTH the live pre-recording preview (below) and the
+    // eventual recording -- no risk of the two ever showing different data.
+    const { tour, teamAObj, teamBObj } = rmResolveTeams();
+    const [teamALogoImg, teamBLogoImg] = await Promise.all([
+      loadTeamLogoImage(teamAObj, 128),
+      loadTeamLogoImage(teamBObj, 128)
+    ]);
+    RM.getOverlayState = ()=>buildOverlayState(match, {
+      tournamentName: tour ? tour.name : null,
+      teamALogoImg, teamBLogoImg
+    });
+
     renderRecordCameraReady();
   }catch(err){
     // Belt-and-braces: any unexpected failure (a rejected promise this
@@ -3656,7 +3685,9 @@ function renderRecordCameraReady(){
   openModal(`
     <h3>🎥 Record Match</h3>
     <div id="rmPreviewMount" style="width:100%;aspect-ratio:16/9;background:#000;border-radius:10px;overflow:hidden;margin-bottom:12px;"></div>
-    <label>Quality</label>
+    <label>Broadcast template <span class="stat-dim">(updates the preview above instantly)</span></label>
+    ${renderTemplateCards()}
+    <label style="margin-top:14px;display:block;">Quality</label>
     <div class="chip-row" style="flex-wrap:wrap;gap:8px;margin-bottom:14px;">
       ${RM.qualityOptions.map(q=>`<div class="chip${q.id === RM.quality.id ? ' sel' : ''}" data-action="rm-pick-quality" data-id="${q.id}">${esc(q.label)}</div>`).join('')}
     </div>
@@ -3670,6 +3701,16 @@ function renderRecordCameraReady(){
       <button class="btn secondary" data-action="rm-back-to-setup">Back</button>
     </div>
   `);
+  // Compositing (camera frame + selected overlay drawn onto one canvas,
+  // every frame) starts here, before any recording exists -- see the
+  // startCompositing() comment in recorder.js for why this used to only
+  // happen once Start Recording was pressed, which meant the preview never
+  // actually showed the overlay until you'd already committed to recording.
+  recorder.startCompositing({
+    templateId: RM.templateId,
+    getOverlayState: RM.getOverlayState,
+    width: RM.quality.width, height: RM.quality.height
+  });
   recorder.mountPreview($('rmPreviewMount'));
 }
 
@@ -3705,26 +3746,21 @@ function rmBackToSetup(){
 }
 
 function rmStartRecording(){
-  const { tour, teamAObj, teamBObj } = rmResolveTeams();
-  Promise.all([
-    loadTeamLogoImage(teamAObj, 128),
-    loadTeamLogoImage(teamBObj, 128)
-  ]).then(([teamALogoImg, teamBLogoImg])=>{
-    const getOverlayState = ()=>buildOverlayState(match, {
-      tournamentName: tour ? tour.name : null,
-      teamALogoImg, teamBLogoImg
+  // getOverlayState was already resolved back in rmContinueToCamera() (team
+  // logos loaded once, up front) so the pre-recording preview and the
+  // actual recording are guaranteed to use the exact same data source —
+  // startRecording() also reuses the compositor already running from that
+  // preview, so this is just "attach the encoder", not "set everything up".
+  try{
+    recorder.startRecording({
+      templateId: RM.templateId, getOverlayState: RM.getOverlayState,
+      width: RM.quality.width, height: RM.quality.height, fps: RM.quality.fps
     });
-    try{
-      recorder.startRecording({
-        templateId: RM.templateId, getOverlayState,
-        width: RM.quality.width, height: RM.quality.height, fps: RM.quality.fps
-      });
-    }catch(err){
-      toast('Could not start recording: ' + (err && err.message ? err.message : String(err)));
-      return;
-    }
-    renderRecordingControls();
-  });
+  }catch(err){
+    toast('Could not start recording: ' + (err && err.message ? err.message : String(err)));
+    return;
+  }
+  renderRecordingControls();
 }
 
 function renderRecordingControls(){
@@ -3738,9 +3774,7 @@ function renderRecordingControls(){
       <span class="stat-dim">${esc(RM.quality.label)}</span>
     </div>
     <label>Broadcast template <span class="stat-dim">(switch anytime — safe mid-recording)</span></label>
-    <div id="rmTemplateGrid" class="chip-row" style="flex-wrap:wrap;gap:8px;margin-bottom:14px;">
-      ${TEMPLATES.map(t=>`<div class="chip${t.id === RM.templateId ? ' sel' : ''}" data-action="rm-pick-template" data-id="${t.id}" style="padding:6px 10px;cursor:pointer;">${esc(t.name)}</div>`).join('')}
-    </div>
+    ${renderTemplateCards()}
     <div class="action-row">
       <button class="btn secondary" id="rmPauseResumeBtn" data-action="rm-pause-resume">Pause</button>
       ${RM.multiCamera ? `<button class="btn secondary" data-action="rm-switch-camera">Switch Camera</button>` : ''}

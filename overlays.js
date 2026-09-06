@@ -25,11 +25,11 @@
 import { curInnings, teamName, runRate, chaseInfo, fmtOvers, bowlerEcon } from './engine.js';
 
 export const TEMPLATES = [
-  { id:'classic',             name:'Classic',             blurb:'Clean traditional dark/blue broadcast style, minimal animation.' },
-  { id:'modern',               name:'Modern',               blurb:'Dark background, CricketConnect green identity, dynamic transitions.' },
-  { id:'broadcast-pro',         name:'Broadcast Pro',         blurb:'Professional TV-style layout with batter and bowler panels.' },
-  { id:'minimal',               name:'Minimal',               blurb:'Small, unobtrusive overlay — your footage stays the focus.' },
-  { id:'tournament-premium',    name:'Tournament Premium',    blurb:'Tournament name, team crests, and full match info.' }
+  { id:'classic',             name:'Classic',             blurb:'Clean traditional cricket broadcast.' },
+  { id:'modern',               name:'Modern',               blurb:'Contemporary sports-streaming style.' },
+  { id:'broadcast-pro',         name:'Broadcast Pro',         blurb:'Premium TV-style broadcast graphics.' },
+  { id:'minimal',               name:'Minimal',               blurb:'Distraction-free compact scoreboard.' },
+  { id:'tournament-premium',    name:'Tournament Premium',    blurb:'Premium tournament & event presentation.' }
 ];
 
 const COLOR = {
@@ -387,21 +387,84 @@ export function drawOverlay(templateId, ctx, w, h, state, activeEvent){
   fn(ctx, w, h, state, activeEvent || null);
 }
 
+/* Small preview swatch for the template picker. This is a miniature of the
+   REAL layout each drawXxx() function above produces (same bar positions,
+   same accent placement, same "TEAM A ... TEAM B" content) rather than a
+   generic placeholder — the picker should never show something the actual
+   recording doesn't deliver. A simulated camera-frame background (a soft
+   green/brown gradient standing in for a pitch) sits behind each so the
+   preview reads as "overlay on footage", not just a colour swatch. */
 export function templateThumbnailSVG(templateId, size = 160){
-  // Small static preview swatch for the template picker — same colour
-  // language as the real overlay so the picker isn't a lie about what
-  // recording will actually look like.
   const t = TEMPLATES.find(x=>x.id === templateId) || TEMPLATES[0];
-  const accents = {
-    classic:'#F8C539', modern:'#25A244', 'broadcast-pro':'#ef4444',
-    minimal:'#A7B0B8', 'tournament-premium':'#F8C539'
-  };
-  const accent = accents[t.id] || COLOR.gold;
-  return `<svg viewBox="0 0 160 90" width="${size}" height="${size * 0.5625}" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="${t.name} preview">
-    <rect width="160" height="90" rx="6" fill="${COLOR.bg2}"/>
-    <rect x="0" y="66" width="160" height="24" fill="${COLOR.bg0}" opacity=".92"/>
-    <rect x="0" y="66" width="160" height="2" fill="${accent}"/>
-    <text x="10" y="80" font-family="-apple-system,Segoe UI,Roboto,sans-serif" font-size="11" font-weight="700" fill="#fff">142/4</text>
-    <text x="150" y="80" text-anchor="end" font-family="-apple-system,Segoe UI,Roboto,sans-serif" font-size="8" fill="${accent}">(15.2)</text>
-  </svg>`;
+  const W = 300, H = 169; // 16:9, matches real recording aspect ratio
+  const F = '-apple-system,Segoe UI,Roboto,sans-serif';
+  const uid = 'tpl-' + t.id; // unique gradient ids so multiple thumbnails on one page don't clash
+
+  const field = `
+    <defs>
+      <linearGradient id="${uid}-field" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0" stop-color="#2b4a33"/>
+        <stop offset="1" stop-color="#1a3322"/>
+      </linearGradient>
+    </defs>
+    <rect width="${W}" height="${H}" rx="10" fill="url(#${uid}-field)"/>
+    <ellipse cx="${W/2}" cy="${H*0.58}" rx="${W*0.46}" ry="${H*0.4}" fill="#3a5c40" opacity=".55"/>
+    <rect x="${W*0.46}" y="${H*0.42}" width="${W*0.08}" height="${H*0.5}" fill="#7a6a4a" opacity=".5"/>`;
+
+  let chrome = '';
+  if(t.id === 'classic'){
+    const barH = H * 0.30, y = H - barH - H * 0.05, barW = W * 0.86, x = (W - barW) / 2;
+    chrome = `
+      <rect x="${x}" y="${y}" width="${barW}" height="${barH}" rx="4" fill="${COLOR.bg0}" opacity=".93"/>
+      <rect x="${x}" y="${y}" width="${barW}" height="2.5" fill="${COLOR.gold}"/>
+      <text x="${x+10}" y="${y+barH*0.44}" font-family="${F}" font-size="12" font-weight="800" fill="#fff">TEAM A 142/4</text>
+      <text x="${x+10}" y="${y+barH*0.82}" font-family="${F}" font-size="8" fill="${COLOR.inkDim}">(15.2 ov) &#183; CRR 9.31</text>
+      <text x="${x+barW-10}" y="${y+barH*0.44}" text-anchor="end" font-family="${F}" font-size="9" font-weight="700" fill="${COLOR.gold}">TEAM B</text>
+      <text x="${x+barW-10}" y="${y+barH*0.82}" text-anchor="end" font-family="${F}" font-size="8" fill="${COLOR.inkDim}">TARGET 280</text>`;
+  } else if(t.id === 'modern'){
+    const pillW = W * 0.62, pillH = H * 0.26, x = W * 0.05, y = H * 0.62;
+    chrome = `
+      <rect x="${x}" y="${y}" width="${pillW}" height="${pillH}" rx="${pillH/2.2}" fill="${COLOR.bg0}" opacity=".94"/>
+      <rect x="${x}" y="${y}" width="6" height="${pillH}" rx="3" fill="${COLOR.acc}"/>
+      <text x="${x+16}" y="${y+pillH*0.4}" font-family="${F}" font-size="9" font-weight="700" fill="${COLOR.acc2}">TEAM A</text>
+      <text x="${x+16}" y="${y+pillH*0.78}" font-family="${F}" font-size="14" font-weight="800" fill="#fff">142/4</text>
+      <text x="${x+pillW-14}" y="${y+pillH*0.78}" text-anchor="end" font-family="${F}" font-size="8" fill="${COLOR.inkDim}">(15.2) CRR 9.31</text>
+      <text x="${x+pillW+14}" y="${y+pillH*0.6}" font-family="${F}" font-size="9" font-weight="700" fill="${COLOR.acc2}">TEAM B</text>`;
+  } else if(t.id === 'broadcast-pro'){
+    const barH = H * 0.32, y = H - barH;
+    chrome = `
+      <polygon points="0,${y+8} ${W},${y} ${W},${H} 0,${H}" fill="${COLOR.bg0}" opacity=".95"/>
+      <rect x="0" y="${y+6}" width="${W}" height="2.5" fill="${COLOR.live}"/>
+      <text x="14" y="${y+barH*0.42}" font-family="${F}" font-size="8" font-weight="700" fill="${COLOR.live}">TEAM A</text>
+      <text x="14" y="${y+barH*0.78}" font-family="${F}" font-size="15" font-weight="900" fill="#fff">142-4</text>
+      <text x="${W*0.46}" y="${y+barH*0.5}" font-family="${F}" font-size="9" fill="${COLOR.inkDim}">15.2 ov</text>
+      <text x="${W*0.46}" y="${y+barH*0.78}" font-family="${F}" font-size="8" fill="${COLOR.inkDim}">CRR 9.31</text>
+      <text x="${W-14}" y="${y+barH*0.42}" text-anchor="end" font-family="${F}" font-size="8" font-weight="700" fill="${COLOR.live}">TEAM B</text>
+      <text x="${W-14}" y="${y+barH*0.78}" text-anchor="end" font-family="${F}" font-size="9" fill="${COLOR.inkDim}">TARGET 280</text>`;
+  } else if(t.id === 'minimal'){
+    const barH = H * 0.16, y = H - barH - H * 0.06, barW = W * 0.9, x = (W - barW) / 2;
+    chrome = `
+      <rect x="${x}" y="${y}" width="${barW}" height="${barH}" rx="${barH/2}" fill="${COLOR.bg0}" opacity=".8"/>
+      <text x="${x+barW/2}" y="${y+barH*0.68}" text-anchor="middle" font-family="${F}" font-size="10" font-weight="700" fill="#fff">TEAM A &#160;142/4 (15.2)&#160; TEAM B</text>`;
+  } else { // tournament-premium
+    const topH = H * 0.16, barH = H * 0.28, y = H - barH;
+    chrome = `
+      <rect x="0" y="0" width="${W}" height="${topH}" fill="${COLOR.bg0}" opacity=".92"/>
+      <circle cx="${W*0.08}" cy="${topH/2}" r="${topH*0.32}" fill="none" stroke="${COLOR.gold}" stroke-width="1.4"/>
+      <circle cx="${W*0.92}" cy="${topH/2}" r="${topH*0.32}" fill="none" stroke="${COLOR.gold}" stroke-width="1.4"/>
+      <text x="${W/2}" y="${topH*0.65}" text-anchor="middle" font-family="${F}" font-size="8" font-weight="800" letter-spacing="1" fill="${COLOR.gold}">TOURNAMENT 2026</text>
+      <rect x="0" y="${y}" width="${W}" height="${barH}" fill="${COLOR.bg0}" opacity=".94"/>
+      <rect x="0" y="${y}" width="${W}" height="2.5" fill="${COLOR.gold}"/>
+      <text x="14" y="${y+barH*0.44}" font-family="${F}" font-size="11" font-weight="800" fill="#fff">TEAM A 142/4</text>
+      <text x="14" y="${y+barH*0.82}" font-family="${F}" font-size="8" fill="${COLOR.inkDim}">15.2 ov &#183; CRR 9.31</text>
+      <text x="${W-14}" y="${y+barH*0.44}" text-anchor="end" font-family="${F}" font-size="9" font-weight="700" fill="${COLOR.gold}">TEAM B</text>
+      <text x="${W-14}" y="${y+barH*0.82}" text-anchor="end" font-family="${F}" font-size="8" fill="${COLOR.inkDim}">TARGET 280</text>`;
+  }
+
+  return `<svg viewBox="0 0 ${W} ${H}" width="${size}" height="${Math.round(size * H / W)}" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="${esc(t.name)} preview">${field}${chrome}</svg>`;
+}
+
+function esc(s){
+  return String(s == null ? '' : s)
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
