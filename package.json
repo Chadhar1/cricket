@@ -1,0 +1,8 @@
+{
+  "name": "cricket-connect-web",
+  "private": true,
+  "description": "Static Cricket Connect web app. This package.json exists only so Vercel installs @vercel/og for the api/ serverless functions (share-link OG image generation) -- there is no build step for the rest of the site.",
+  "dependencies": {
+    "@vercel/og": "^0.6.3"
+  }
+}

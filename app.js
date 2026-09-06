@@ -4153,7 +4153,14 @@ function renderMatchPulse(){
 }
 
 function shareUrl(id){
-  return location.origin + location.pathname.replace(/index\.html$/, '') + 'live.html?m=' + id;
+  // Points at the /api/share bot-friendly shell (see legacy-app/api/share.js),
+  // not live.html directly: live.html is client-rendered, so a crawler
+  // fetching it for a WhatsApp/Facebook/etc. link preview would only ever see
+  // the empty pre-JS shell. /api/share renders real og:image/og:title tags
+  // server-side from the same match data, then redirects a real visitor
+  // straight on to live.html -- so people still land on the live page, only
+  // the link-preview step is different.
+  return location.origin + location.pathname.replace(/index\.html$/, '') + 'api/share?m=' + id;
 }
 
 /* ---------------- RESULT / SCORECARD ---------------- */
@@ -4308,11 +4315,19 @@ function matchInfoHTML(m){
     `<div class="info-row"><span class="ir-k">${esc(k)}</span><span class="ir-v">${esc(v)}</span></div>`).join('')}</div>`;
 }
 async function shareResult(m){
+  // Was text-only (no url), which is exactly why a WhatsApp share rendered as
+  // plain text instead of a link card: there was no link for WhatsApp's
+  // crawler to unfurl into a preview. Adding the /api/share url (see
+  // shareUrl()) gives it something to turn into a real image card, as long
+  // as this match's live_matches row still exists (it does unless the scorer
+  // explicitly turned live sharing off) -- api/og.js falls back to a generic
+  // branded image rather than failing if the row is gone.
   const l = [`${m.teamA} vs ${m.teamB}`, inningsLine(m,0), m.innings[1] ? inningsLine(m,1) : '', '', m.resultText]
     .filter(Boolean).join('\n');
+  const url = shareUrl(m.id);
   try{
-    if(navigator.share){ await navigator.share({ title:'Cricket Connect — match result', text:l }); return; }
-    await navigator.clipboard.writeText(l); toast('Result copied');
+    if(navigator.share){ await navigator.share({ title:'Cricket Connect — match result', text:l, url }); return; }
+    await navigator.clipboard.writeText(l + '\n' + url); toast('Result copied');
   }catch(e){ toast('Could not share'); }
 }
 
