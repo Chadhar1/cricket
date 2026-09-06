@@ -64,7 +64,7 @@ export async function initCloud(){
     ready = true;
     return true;
   }catch(err){
-    console.error('Supabase init failed, running local-only:', err);
+    console.error('Backend init failed, running local-only:', err);
     ready = false;
     return false;
   }

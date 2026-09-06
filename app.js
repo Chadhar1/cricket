@@ -1057,9 +1057,9 @@ function renderProfile(){
 
   const who = $('authWho'), btn = $('authActionBtn');
   if(!cloudReady()){
-    who.innerHTML = '<span class="dot offline"></span>Local only &middot; Supabase not configured';
+    who.innerHTML = '<span class="dot offline"></span>Local only &middot; not connected';
     btn.textContent = 'How to connect';
-    btn.onclick = ()=>toast('Add your project URL and key to supabase-config.js, then redeploy');
+    btn.onclick = ()=>toast('This build is not connected to an account yet — contact support if this persists');
   } else if(u){
     who.innerHTML = '<span class="dot online"></span>Synced as <b>' + esc(u.email || displayName()) + '</b>';
     btn.textContent = 'Sign out';
@@ -3767,9 +3767,17 @@ async function rmStopRecording(){
 }
 
 function rmFileName(){
-  const clean = s=>String(s || 'team').replace(/[^a-z0-9]+/gi, '-').replace(/(^-|-$)/g, '').toLowerCase();
+  // "Lions vs Kings - 2026-08-30 22.47.ext" — matches the Capacitor native
+  // recorder's filename format (record-match-native-ui.js's
+  // buildRecordingFilename()) so saved recordings look the same across
+  // both apps. Strips characters invalid in filenames rather than
+  // slugifying, so team names stay readable.
+  const safe = s => String(s || 'Team').replace(/[\\/:*?"<>|]/g, '').trim() || 'Team';
   const ext = (RM.summary.mimeType || '').includes('mp4') ? 'mp4' : 'webm';
-  return `cricketconnect-${clean(match.teamA)}-vs-${clean(match.teamB)}-${Date.now()}.${ext}`;
+  const pad = n => String(n).padStart(2, '0');
+  const d = new Date();
+  const stamp = `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())} ${pad(d.getHours())}.${pad(d.getMinutes())}`;
+  return `${safe(match.teamA)} vs ${safe(match.teamB)} - ${stamp}.${ext}`;
 }
 
 function renderRecordSummary(){
@@ -7510,6 +7518,13 @@ function bind(){
     else if(a === 'go-notifications'){ go('notifications'); refreshMyNotifications().then(renderNotifications); }
     else if(a === 'go-profile') go('profile');
     else if(a === 'go-auth') go('auth');
+    // Profile's "My Cricket" card — same bare go() calls Home's own
+    // quick-action buttons already use (homeStatsSeeAll/qaHistory/qaTeams),
+    // not the refresh-then pattern above: these screens load their own data
+    // on render, unlike friends/admin/notifications.
+    else if(a === 'go-stats') go('stats');
+    else if(a === 'go-history'){ historyViewId = null; go('history'); }
+    else if(a === 'go-teams') go('teams');
     else if(a === 'send-friend') sendFriendReq(el.dataset.uid);
     else if(a === 'accept-friend') respondFriendReq(el.dataset.id, true);
     else if(a === 'decline-friend') respondFriendReq(el.dataset.id, false);

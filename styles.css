@@ -1362,3 +1362,364 @@ button:focus-visible, input:focus-visible, select:focus-visible, .chip:focus-vis
 .leaflet-popup-content{ margin:10px 12px; }
 .leaflet-popup-tip{ background:var(--bg-2); }
 .leaflet-popup-content a{ color:var(--acc-2); }
+
+/* ===========================================================================
+   CricketConnect — brand palette v7 (logo-matched)
+   ---------------------------------------------------------------------------
+   Brings the web app / PWA / TWA in line with the Capacitor app's theme
+   (native-src/theme-capacitor.css), so all three surfaces show the same
+   colours and logo. Loads after the :root above on purpose: this block only
+   redeclares the specific custom properties it needs to change, everything
+   else declared in the first :root (like --navy-1/2/3) still resolves live
+   through the new values since custom properties cascade per-property.
+
+   COLOUR PROVENANCE — sampled from the official logo, not invented
+   ---------------------------------------------------------------
+     #020C1B  stadium sky (6.5% of the logo)   -> bg-primary
+     #041221  dominant dark field (17.9%)      -> bg-secondary
+     #122C52  mid navy (10.7%)                 -> raised surface
+     #1B46ED  most vivid blue (27,477 px)      -> deep blue
+     #59C3F8  icon border glow (1,840 px)      -> cyan
+     #A4F851  most vivid green (13,280 px)     -> lime / signature accent
+     #8DE789  softer green (5.6%)              -> green
+     #EFB23E  ball motion trail                -> gold
+     #E4322A  the cricket ball                 -> red / danger
+     #F5F5F0  "CRICKET" wordmark (7.8%)        -> text (warm white, not #FFF)
+   =========================================================================== */
+
+:root{
+  /* ---- canonical CricketConnect tokens (the names the brief asked for) ---- */
+  --cc-bg-primary:#020C1B;
+  --cc-bg-secondary:#041221;
+  --cc-surface:#0A1B31;
+  --cc-surface-2:#122C52;
+
+  --cc-blue-deep:#133587;
+  --cc-blue:#3D7BFF;
+  --cc-cyan:#59C3F8;
+  --cc-green:#8DE789;
+  --cc-green-deep:#3E8E4F;
+  --cc-lime:#A4F851;
+
+  --cc-gold:#EFB23E;
+  --cc-danger:#D42A22;
+  --cc-warning:#EFB23E;
+  --cc-success:#8DE789;
+
+  --cc-text:#F5F5F0;
+  --cc-text-secondary:#A9B8C8;
+  --cc-border:rgba(89,195,248,.13);
+  --cc-border-strong:rgba(89,195,248,.24);
+
+  /* ---- signature gradient: blue -> cyan -> green ----
+     Reserved for primary actions and the few "this is the important thing on
+     screen" moments. Applying it everywhere would destroy its job as a
+     hierarchy signal, which is the whole reason it exists. */
+  --cc-gradient:linear-gradient(100deg,#3D7BFF 0%,#59C3F8 46%,#A4F851 100%);
+  --cc-gradient-soft:linear-gradient(100deg,rgba(61,123,255,.20) 0%,rgba(89,195,248,.16) 46%,rgba(164,248,81,.16) 100%);
+
+  /* ---- glow tokens ---- */
+  --cc-glow-blue:0 6px 22px -8px rgba(61,123,255,.55);
+  --cc-glow-cyan:0 0 0 1px rgba(89,195,248,.28), 0 6px 20px -10px rgba(89,195,248,.5);
+  --cc-glow-lime:0 0 14px -2px rgba(164,248,81,.45);
+
+  /* ---- radius / typography scale ---- */
+  --cc-r-sm:10px;
+  --cc-r-md:14px;
+  --cc-r-lg:18px;
+  --cc-r-xl:22px;
+
+  --cc-font:"Poppins","Roboto","Segoe UI",-apple-system,BlinkMacSystemFont,Helvetica,Arial,sans-serif;
+
+  /* =====================================================================
+     Remap of this file's own pre-existing variables onto the palette above.
+     This is what actually re-skins the rest of the stylesheet above.
+     ===================================================================== */
+  --bg-0:var(--cc-bg-primary);
+  --bg-1:var(--cc-bg-secondary);
+  --bg-2:var(--cc-surface);
+  --bg-3:var(--cc-surface-2);
+
+  --acc:var(--cc-blue);
+  --acc-2:var(--cc-cyan);
+  --acc-dim:var(--cc-blue-deep);
+  --acc-glow:rgba(61,123,255,.22);
+
+  /* --live is this file's DANGER colour as well as its live marker
+     (.btn.danger reads var(--live)), so it stays red. The live-match
+     indicators are turned green individually further down instead — turning
+     this token green would make every destructive button green. */
+  --live:var(--cc-danger);
+  --warn:var(--cc-warning);
+  --info:var(--cc-cyan);
+
+  --ink:var(--cc-text);
+  --ink-2:#D7E2EC;
+  --ink-dim:var(--cc-text-secondary);
+
+  --line:var(--cc-border);
+  --line-2:var(--cc-border-strong);
+
+  /* legacy aliases — kept pointing at real greens/golds so semantic names
+     don't lie (.run-btn.four wants an actual green border, not the accent) */
+  --gold:var(--cc-gold);
+  --gold-soft:#F7CD72;
+  --green:var(--cc-green-deep);
+  --green-2:var(--cc-green);
+  --red:var(--cc-danger);
+  --card-bg:var(--cc-surface);
+  --card-border:var(--cc-border);
+  --brand-green:var(--cc-green);
+  --brand-blue:var(--cc-blue);
+  --brand-red:var(--cc-danger);
+}
+
+/* ===========================================================================
+   TYPOGRAPHY
+   =========================================================================== */
+body{
+  font-family:var(--cc-font);
+  -webkit-font-smoothing:antialiased;
+}
+h1,h2,h3{letter-spacing:-.2px;}
+h1{font-weight:800;}
+h2,h3{font-weight:600;}
+.sb-score,.rh-score,.fx-score,.stat-box b,.hero-stat b,.rank-val,.op-count{
+  font-weight:800;
+  font-variant-numeric:tabular-nums;
+  letter-spacing:-.5px;
+}
+
+/* ===========================================================================
+   STADIUM BACKDROP
+   =========================================================================== */
+body{
+  background:var(--cc-bg-primary);
+  background-image:
+    radial-gradient(1000px 520px at 82% -10%, rgba(61,123,255,.16), transparent 62%),
+    radial-gradient(760px 440px at 6% 4%, rgba(89,195,248,.09), transparent 60%),
+    radial-gradient(900px 600px at 50% 108%, rgba(164,248,81,.06), transparent 62%);
+  background-attachment:fixed;
+}
+
+/* ===========================================================================
+   CARDS
+   =========================================================================== */
+.card{
+  background:linear-gradient(160deg, var(--cc-surface) 0%, var(--cc-bg-secondary) 100%);
+  border:1px solid var(--cc-border);
+  border-radius:var(--cc-r-lg);
+  box-shadow:
+    inset 0 1px 0 rgba(89,195,248,.07),
+    0 12px 28px -18px rgba(0,0,0,.75);
+}
+.auth-card,.profile-chip,.skeleton-card,.mini-card,.player-card,.tour-card,.live-card{
+  border-color:var(--cc-border);
+}
+.scoreboard{
+  background:
+    radial-gradient(120% 150% at 100% -20%, rgba(61,123,255,.20), transparent 58%),
+    linear-gradient(160deg, var(--cc-surface-2) 0%, var(--cc-surface) 100%);
+  border:1px solid var(--cc-border-strong);
+  border-radius:var(--cc-r-lg);
+}
+.hero{
+  background:
+    radial-gradient(120% 140% at 100% -10%, rgba(61,123,255,.26), transparent 55%),
+    radial-gradient(90% 120% at -10% 115%, rgba(164,248,81,.12), transparent 60%),
+    linear-gradient(160deg, var(--cc-surface) 0%, var(--cc-bg-primary) 100%);
+  border-radius:var(--cc-r-xl);
+}
+
+/* ===========================================================================
+   BUTTONS
+   =========================================================================== */
+.btn{
+  background:var(--cc-gradient);
+  color:#03121F;
+  font-weight:700;
+  border-radius:var(--cc-r-md);
+  box-shadow:var(--cc-glow-blue);
+}
+@media (hover:hover){ .btn:hover:not(:disabled){filter:brightness(1.06);} }
+.btn:active:not(:disabled){filter:brightness(.94); transform:scale(.99);}
+.btn:focus-visible{outline:2px solid var(--cc-cyan); outline-offset:2px;}
+
+.btn.secondary{
+  background:rgba(89,195,248,.06);
+  border:1px solid var(--cc-border-strong);
+  color:var(--cc-text);
+  box-shadow:none;
+}
+.btn.gold{
+  background:var(--cc-gold);
+  color:#231703;
+  box-shadow:0 6px 20px -10px rgba(239,178,62,.6);
+}
+.btn.danger{
+  background:var(--cc-danger);
+  color:#fff;
+  box-shadow:0 6px 20px -10px rgba(212,42,34,.6);
+}
+.btn-google{border-color:var(--cc-border-strong);}
+
+/* ===========================================================================
+   SCORING CONTROLS
+   =========================================================================== */
+.run-btn{
+  background:rgba(89,195,248,.05);
+  border:1px solid var(--cc-border-strong);
+  border-radius:var(--cc-r-md);
+  color:var(--cc-text);
+  min-height:56px;
+}
+.run-btn:active{background:rgba(61,123,255,.26);}
+.run-btn.four{border-color:var(--cc-green); color:var(--cc-green);}
+.run-btn.six{border-color:var(--cc-lime); color:var(--cc-lime); box-shadow:var(--cc-glow-lime);}
+.extra-btn{
+  background:rgba(89,195,248,.05);
+  border:1px solid var(--cc-border);
+  border-radius:var(--cc-r-sm);
+  min-height:42px;
+}
+.extra-btn:active{background:rgba(61,123,255,.22);}
+
+.over-ball{background:rgba(89,195,248,.10);}
+.freehit-banner{
+  background:var(--cc-gradient-soft);
+  border:1px solid var(--cc-border-strong);
+}
+
+/* ===========================================================================
+   LIVE INDICATORS
+   =========================================================================== */
+.live-badge{color:var(--cc-lime);}
+.badge-live{
+  background:rgba(164,248,81,.13);
+  border:1px solid rgba(164,248,81,.42);
+  color:var(--cc-lime);
+}
+.badge-live i{background:var(--cc-lime); box-shadow:var(--cc-glow-lime);}
+.sidenav .pill-live{
+  background:var(--cc-lime);
+  color:#0A2010;
+}
+.pill-live.mini{
+  background:var(--cc-lime);
+  box-shadow:0 0 0 2px var(--cc-bg-primary), var(--cc-glow-lime);
+}
+
+/* ===========================================================================
+   NAVIGATION
+   =========================================================================== */
+.tabbar{
+  background:rgba(4,18,33,.94);
+  backdrop-filter:blur(14px);
+  border-top:1px solid var(--cc-border);
+}
+.tabbar button.active{color:var(--cc-lime);}
+.tabbar button.active::before{
+  content:"";
+  position:absolute; top:4px; left:50%; transform:translateX(-50%);
+  width:34px; height:3px; border-radius:3px;
+  background:var(--cc-gradient);
+  box-shadow:var(--cc-glow-lime);
+}
+.sidebar{background:var(--cc-bg-secondary); border-right:1px solid var(--cc-border);}
+.sidenav button.active{
+  background:var(--cc-gradient-soft);
+  color:var(--cc-text);
+  border-radius:var(--cc-r-sm);
+}
+.sidebar-promo{background:var(--cc-surface); border:1px solid var(--cc-border);}
+.topbar .brand .ball{
+  background:radial-gradient(circle at 35% 30%, #F0665C, var(--cc-danger));
+  border-color:rgba(255,255,255,.28);
+}
+
+/* ===========================================================================
+   CHIPS / PILLS / BADGES
+   =========================================================================== */
+.chip{
+  background:rgba(89,195,248,.05);
+  border:1px solid var(--cc-border-strong);
+}
+.chip:active{background:rgba(61,123,255,.24);}
+.chip.pick{border-color:var(--cc-border);}
+.seg{background:rgba(89,195,248,.05); border:1px solid var(--cc-border);}
+.badge{border-color:var(--cc-border-strong);}
+.role-badge{
+  background:var(--cc-gradient-soft);
+  border:1px solid var(--cc-border-strong);
+  color:var(--cc-cyan);
+}
+
+/* ===========================================================================
+   LOADING / SKELETON
+   =========================================================================== */
+.skeleton{
+  background:linear-gradient(90deg,
+    rgba(89,195,248,.05) 25%,
+    rgba(89,195,248,.13) 37%,
+    rgba(89,195,248,.05) 63%);
+  background-size:400% 100%;
+}
+.skeleton-card{background:var(--cc-surface); border:1px solid var(--cc-border);}
+.spinner{border-top-color:var(--cc-cyan);}
+
+/* ===========================================================================
+   FORMS
+   =========================================================================== */
+input,select,textarea{
+  background:var(--cc-bg-secondary);
+  border:1px solid var(--cc-border);
+  border-radius:var(--cc-r-sm);
+  color:var(--cc-text);
+}
+input:focus,select:focus,textarea:focus{
+  border-color:var(--cc-cyan);
+  box-shadow:0 0 0 3px rgba(89,195,248,.16);
+  outline:none;
+}
+
+/* ===========================================================================
+   BRAND LOCKUP (sign-in screen)
+   brand-real-logo.js swaps the inline SVG brandmark for the real logo
+   artwork; these rules give it room and a floodlit halo.
+   =========================================================================== */
+.lockup-mark img.cc-brand-img{filter:drop-shadow(0 10px 26px rgba(61,123,255,.45));}
+.lockup-name span{color:var(--cc-lime);}
+.lockup-rule{background:var(--cc-gradient); height:2px; opacity:.85;}
+
+img.cc-brand-img{display:block; object-fit:contain; max-width:100%; height:auto;}
+
+/* ===========================================================================
+   ACCESSIBILITY GUARDS
+   =========================================================================== */
+.btn,.run-btn,.quick-btn,.action-row-btn,.tabbar button{min-height:44px;}
+
+a:focus-visible,button:focus-visible,input:focus-visible,
+select:focus-visible,textarea:focus-visible,[tabindex]:focus-visible{
+  outline:2px solid var(--cc-cyan);
+  outline-offset:2px;
+}
+
+@media (prefers-reduced-motion:reduce){
+  *,*::before,*::after{
+    animation-duration:.001ms !important;
+    animation-iteration-count:1 !important;
+    transition-duration:.001ms !important;
+  }
+}
+
+/* ===========================================================================
+   RESPONSIVENESS
+   =========================================================================== */
+@media (max-width:360px){
+  #app{padding-left:10px; padding-right:10px;}
+  .sb-score{font-size:38px;}
+  .run-btn{min-height:50px; font-size:18px;}
+}
+@media (min-width:430px){
+  .sb-score{font-size:48px;}
+}
