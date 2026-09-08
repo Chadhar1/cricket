@@ -485,12 +485,13 @@
   </div>
 
   <div class="card hidden" id="sharePanel">
-    <h2><span class="dot live"></span>Live share is on</h2>
-    <div class="stat-dim">Anyone with this link can watch ball by ball.</div>
-    <div class="share-url">
-      <code id="shareUrl">&mdash;</code>
-      <button class="icon-btn" id="copyShareBtn">Copy</button>
-    </div>
+    <div class="share-head"><span class="dot live"></span><span class="share-head-title">Live match</span></div>
+    <div class="share-teams" id="shareTeams">&mdash;</div>
+    <div class="share-scoreline" id="shareScoreline">&mdash;</div>
+    <div class="stat-dim share-updates"><span class="dot live"></span>Ball-by-ball updates</div>
+    <button class="btn gold" id="shareWhatsappBtn">&#128172;&nbsp; Share on WhatsApp</button>
+    <button class="btn secondary" id="copyShareBtn">&#128203;&nbsp; Copy Live Link</button>
+    <button class="link-btn" id="showQrBtn">&#9635; Show QR Code</button>
   </div>
 
   <div class="card">

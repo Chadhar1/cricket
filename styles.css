@@ -345,6 +345,30 @@ table.sc-table td.num, table.sc-table th.num{text-align:right;}
   flex:1; font-size:12px; color:var(--gold-soft); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
   font-family:ui-monospace,SFMono-Regular,Menlo,monospace; user-select:all;
 }
+
+/* Share panel — redesigned card. No raw URL is ever rendered here (see
+   renderLive()/shareUrl() in app.js); the link only ever appears inside the
+   WhatsApp message text, the clipboard payload, or encoded into the QR
+   image, never as visible text in this card. */
+.share-head{display:flex; align-items:center; gap:0;}
+.share-head-title{
+  font-size:11.5px; font-weight:800; letter-spacing:0.8px; text-transform:uppercase; color:var(--live);
+}
+.share-teams{
+  font-size:16.5px; font-weight:700; margin-top:8px; color:var(--ink);
+  overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+}
+.share-scoreline{font-size:13.5px; color:var(--ink-dim); margin-top:3px;}
+.share-updates{margin-top:12px; display:flex; align-items:center; font-size:12.5px;}
+.share-error{
+  margin-top:10px; font-size:12.5px; color:var(--ink-dim); background:rgba(0,0,0,0.25);
+  border:1px solid var(--card-border); border-radius:10px; padding:10px 12px;
+}
+
+/* QR share modal */
+.qr-modal-canvas-wrap{display:flex; justify-content:center; margin:16px 0 10px;}
+.qr-modal-canvas-wrap canvas{border-radius:12px; background:#fff; padding:12px; max-width:100%; height:auto;}
+.qr-modal-caption{text-align:center; color:var(--ink-dim); font-size:13px; margin-top:2px;}
 /* Team roster chips */
 .roster-chip{
   display:inline-flex; align-items:center; gap:6px; padding:7px 12px; border-radius:18px;

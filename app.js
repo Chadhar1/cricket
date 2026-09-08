@@ -4164,7 +4164,16 @@ function renderLive(){
   const panel = $('sharePanel');
   if(match.liveShare && cloudReady() && getUser()){
     panel.classList.remove('hidden');
-    $('shareUrl').textContent = shareUrl(match.id);
+    // Dynamic match info only -- the raw share URL itself is deliberately
+    // never rendered into this card (see shareUrl()/openQrModal() below);
+    // it only ever leaves this function inside the WhatsApp message text,
+    // the clipboard payload, or encoded into the QR image. liveShareInfo()
+    // is the one place that formats "teams" / "score (overs)" for sharing
+    // purposes so the card, the WhatsApp text and the QR caption can never
+    // drift out of sync with each other.
+    const info = liveShareInfo(match);
+    $('shareTeams').textContent = info.teams;
+    $('shareScoreline').textContent = info.scoreText + '  •  ' + info.oversText;
   } else panel.classList.add('hidden');
 }
 function renderMatchPulse(){
@@ -4206,6 +4215,80 @@ function shareUrl(id){
   // straight on to live.html -- so people still land on the live page, only
   // the link-preview step is different.
   return location.origin + location.pathname.replace(/index\.html$/, '') + 'api/share?m=' + id;
+}
+
+/* Single source of truth for how a match's live state is summarised for
+   sharing (WhatsApp text, the share card, the QR caption). Deliberately
+   separate from the scoreboard's own renderLive() formatting so this can
+   be reused from click handlers without re-deriving it -- not a second
+   scoring system, just string formatting over the same curInnings()/
+   teamName()/fmtOvers() the scoreboard itself already uses. */
+function liveShareInfo(m){
+  const inn = curInnings(m);
+  return {
+    teams: teamName(m, inn.battingTeam) + ' vs ' + teamName(m, inn.bowlingTeam),
+    scoreText: inn.runs + '/' + inn.wickets,
+    oversText: fmtOvers(inn.legalBalls) + ' overs'
+  };
+}
+
+/* Builds the pre-filled WhatsApp message text. Kept separate from
+   shareUrl() (which only builds the URL) so the URL-generation logic
+   itself is never duplicated -- this just composes a message around
+   whatever shareUrl() already returns. */
+function whatsappShareText(m){
+  const info = liveShareInfo(m);
+  return `🏏 ${info.teams} — LIVE NOW\n` +
+    `Score: ${info.scoreText} (${info.oversText})\n\n` +
+    `🔴 Watch the match live, ball by ball:\n${shareUrl(m.id)}`;
+}
+
+/* Opens wa.me with the message pre-filled. This is the same mechanism
+   WhatsApp's own "share" buttons use across the web -- no WhatsApp API,
+   no Business API, no server involved. Works from a normal browser tab,
+   the installed TWA (still just Chrome underneath) and inside Capacitor
+   (opens the system browser / the WhatsApp app itself via the OS's normal
+   URL-intent handling). If the live URL can't be generated for some
+   reason, this fails loudly with a toast rather than opening WhatsApp
+   with a broken/blank message. */
+function shareLiveOnWhatsapp(m){
+  try{
+    const text = whatsappShareText(m);
+    window.open('https://wa.me/?text=' + encodeURIComponent(text), '_blank');
+  }catch(err){
+    console.error('shareLiveOnWhatsapp failed:', err);
+    toast('Live sharing is temporarily unavailable.');
+  }
+}
+
+/* QR modal: lazy-loads the tiny "qrcode" package straight from esm.sh the
+   same way cloud.js already lazy-loads supabase-js (see SDK_URL there) --
+   no npm install, no build step, no new project dependency, and the
+   ~10KB module is only ever fetched the first time someone actually taps
+   "Show QR Code". The QR always encodes the exact same shareUrl(), so it
+   points at the identical place as the WhatsApp message and the copy
+   button. */
+async function openQrModal(m){
+  const info = liveShareInfo(m);
+  openModal(`<h3>Live match</h3>
+    <div class="stat-dim" style="text-align:center;">${esc(info.teams)}</div>
+    <div class="stat-dim" style="text-align:center;">${esc(info.scoreText)} &middot; ${esc(info.oversText)}</div>
+    <div class="qr-modal-canvas-wrap" id="qrCanvasWrap">
+      <div class="stat-dim">Generating QR code…</div>
+    </div>
+    <div class="qr-modal-caption">Scan to watch live</div>
+    <button class="btn secondary" data-action="close">Close</button>`);
+  try{
+    const QRCode = await import('https://esm.sh/qrcode@1.5.4');
+    const canvas = document.createElement('canvas');
+    await QRCode.toCanvas(canvas, shareUrl(m.id), { width: 220, margin: 1 });
+    const wrap = $('qrCanvasWrap');
+    if(wrap){ wrap.innerHTML = ''; wrap.appendChild(canvas); }
+  }catch(err){
+    console.error('openQrModal failed:', err);
+    const wrap = $('qrCanvasWrap');
+    if(wrap) wrap.innerHTML = '<div class="share-error">Live sharing is temporarily unavailable.</div>';
+  }
 }
 
 /* ---------------- RESULT / SCORECARD ---------------- */
@@ -6108,13 +6191,24 @@ function bind(){
   $('undoBtn').addEventListener('click', undo);
   $('swapStrikeBtn').addEventListener('click', manualSwap);
   $('endInningsBtn').addEventListener('click', ()=>{ if(match && !match.completed) confirmEndInnings(); });
+  $('shareWhatsappBtn').addEventListener('click', ()=>{ if(match) shareLiveOnWhatsapp(match); });
   $('copyShareBtn').addEventListener('click', async ()=>{
+    // Always copies straight to the clipboard -- "Share on WhatsApp" above
+    // is the button for opening a share target; this one is specifically
+    // "put the link on my clipboard", so it no longer routes through
+    // navigator.share (which would sometimes open a share sheet instead of
+    // actually copying anything).
+    if(!match){ toast('Live sharing is temporarily unavailable.'); return; }
     try{
       const url = shareUrl(match.id);
-      if(navigator.share) await navigator.share({ title:'Watch live on Cricket Connect', url });
-      else { await navigator.clipboard.writeText(url); toast('Link copied'); }
-    }catch(e){ toast('Could not copy'); }
+      await navigator.clipboard.writeText(url);
+      toast('✓ Live link copied');
+    }catch(err){
+      console.error('copyShareBtn failed:', err);
+      toast('Live sharing is temporarily unavailable.');
+    }
   });
+  $('showQrBtn').addEventListener('click', ()=>{ if(match) openQrModal(match); });
   $('liveShareToggle').addEventListener('change', async e=>{
     if(!match) return;
     match.liveShare = e.target.checked;
