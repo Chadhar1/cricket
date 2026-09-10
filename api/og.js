@@ -24,7 +24,7 @@ const SUPABASE_URL = 'https://hkqiroednyfpkwmlrreg.supabase.co';
 const ANON_KEY =
   'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImhrcWlyb2VkbnlmcGt3bWxycmVnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODU3NzQ0MDksImV4cCI6MjEwMTM1MDQwOX0.WsQ90f9RbOLbR-ibGurmAn4VIc-RdVa-qgGFKLKOgAQ';
 
-const LOGO_URL = 'https://cricket-pied-ten.vercel.app/icon-192.png';
+const LOGO_URL = 'https://cricket-chadhar.vercel.app/icon-192.png';
 
 // Palette lifted straight from styles.css's new brand tokens (--cc-*) so the
 // share image matches the site instead of drifting into its own colours.
