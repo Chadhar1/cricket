@@ -122,6 +122,17 @@ body.app{user-select:none;}
   color:var(--ink-dim); margin:22px 2px 8px;
 }
 .screen-section-label:first-of-type{ margin-top:6px; }
+
+/* Groups several previously-separate cards inside one outer .card so a
+   long list-style screen reads as a handful of sections instead of a wall
+   of identical small boxes. Each .subsection keeps its own id so app.js's
+   existing show/hide toggles (organiserProgressCard, feedbackCard, etc.)
+   still work unchanged -- only the outer boundary/heading style changed,
+   not the logic. */
+.subsection h3{ margin:0 0 12px; font-size:14px; font-weight:600; color:var(--ink); }
+.subsection + .subsection{
+  margin-top:18px; padding-top:16px; border-top:1px solid var(--line);
+}
 label{display:block; font-size:12px; color:var(--ink-dim); margin:10px 0 4px;}
 input[type=text], input[type=password], input[type=email], input[type=number],
 input[type=date], input[type=time], input[type=search], input[type=tel],

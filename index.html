@@ -875,29 +875,30 @@
 
   <div class="screen-section-label">Your Profile</div>
   <div class="card">
-    <h2>My Cricket</h2>
-    <button class="action-row-btn" data-action="go-stats">
-      <span class="arb-ico"><svg viewBox="0 0 24 24"><path d="M4 20V10M12 20V4M20 20v-7"/></svg></span>
-      <span class="arb-txt"><span class="arb-t">Statistics</span>
-        <span class="arb-s">Your batting and bowling numbers</span></span>
-      <span class="arb-go">&rsaquo;</span>
-    </button>
-    <button class="action-row-btn" data-action="go-history">
-      <span class="arb-ico"><svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M8 3v4M16 3v4M3 10h18"/></svg></span>
-      <span class="arb-txt"><span class="arb-t">Match history</span>
-        <span class="arb-s">Every match you've scored or played</span></span>
-      <span class="arb-go">&rsaquo;</span>
-    </button>
-    <button class="action-row-btn" data-action="go-teams">
-      <span class="arb-ico"><svg viewBox="0 0 24 24"><circle cx="9" cy="8" r="3"/><path d="M3 20v-1a5 5 0 015-5h2a5 5 0 015 5v1"/><circle cx="17" cy="9" r="2.5"/><path d="M16 14h1a4 4 0 014 4v2"/></svg></span>
-      <span class="arb-txt"><span class="arb-t">My teams</span>
-        <span class="arb-s">Teams you've created or joined</span></span>
-      <span class="arb-go">&rsaquo;</span>
-    </button>
-  </div>
+    <div class="subsection">
+      <h3>My Cricket</h3>
+      <button class="action-row-btn" data-action="go-stats">
+        <span class="arb-ico"><svg viewBox="0 0 24 24"><path d="M4 20V10M12 20V4M20 20v-7"/></svg></span>
+        <span class="arb-txt"><span class="arb-t">Statistics</span>
+          <span class="arb-s">Your batting and bowling numbers</span></span>
+        <span class="arb-go">&rsaquo;</span>
+      </button>
+      <button class="action-row-btn" data-action="go-history">
+        <span class="arb-ico"><svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M8 3v4M16 3v4M3 10h18"/></svg></span>
+        <span class="arb-txt"><span class="arb-t">Match history</span>
+          <span class="arb-s">Every match you've scored or played</span></span>
+        <span class="arb-go">&rsaquo;</span>
+      </button>
+      <button class="action-row-btn" data-action="go-teams">
+        <span class="arb-ico"><svg viewBox="0 0 24 24"><circle cx="9" cy="8" r="3"/><path d="M3 20v-1a5 5 0 015-5h2a5 5 0 015 5v1"/><circle cx="17" cy="9" r="2.5"/><path d="M16 14h1a4 4 0 014 4v2"/></svg></span>
+        <span class="arb-txt"><span class="arb-t">My teams</span>
+          <span class="arb-s">Teams you've created or joined</span></span>
+        <span class="arb-go">&rsaquo;</span>
+      </button>
+    </div>
 
-  <div class="card" id="profileEditCard">
-    <h2>Your Details</h2>
+    <div class="subsection" id="profileEditCard">
+      <h3>Your Details</h3>
     <label>Display name</label>
     <input type="text" id="profileNameInput" placeholder="Your name" maxlength="30" autocomplete="name">
     <label>Username</label>
@@ -981,98 +982,103 @@
     <label>Or choose an icon</label>
     <div class="avatar-grid" id="profileAvatarGrid"></div>
     <button class="btn" id="saveProfileBtn">Save Profile</button>
+    </div>
   </div>
 
   <div class="screen-section-label">Community</div>
   <div class="card">
-    <h2>Community</h2>
-    <button class="action-row-btn" id="viewMyProfileBtn">
-      <span class="arb-ico"><svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21v-1a6 6 0 016-6h4a6 6 0 016 6v1"/></svg></span>
-      <span class="arb-txt"><span class="arb-t">My public player profile</span>
-        <span class="arb-s">Stats, teams and tournaments — shareable once you set a username</span></span>
-      <span class="arb-go">&rsaquo;</span>
-    </button>
-    <button class="action-row-btn" data-action="go-friends">
-      <span class="arb-ico"><svg viewBox="0 0 24 24"><circle cx="9" cy="8" r="3.5"/><path d="M2 20v-1a5 5 0 015-5h4a5 5 0 015 5v1"/></svg></span>
-      <span class="arb-txt"><span class="arb-t">Friends</span>
-        <span class="arb-s" id="friendsCountHint">Find and add players you know</span></span>
-      <span class="arb-go">&rsaquo;</span>
-    </button>
-    <button class="action-row-btn hidden" id="applyOrganiserBtn">
-      <span class="arb-ico"><svg viewBox="0 0 24 24"><path d="M6 4h12v5a6 6 0 01-12 0z"/><path d="M10 19h4M12 15v4"/></svg></span>
-      <span class="arb-txt"><span class="arb-t" id="applyOrganiserLabel">Apply to be an organiser</span>
-        <span class="arb-s" id="applyOrganiserSub">Run your own public tournaments</span></span>
-      <span class="arb-go">&rsaquo;</span>
-    </button>
-    <button class="action-row-btn hidden" id="goAdminBtn" data-action="go-admin">
-      <span class="arb-ico"><svg viewBox="0 0 24 24"><path d="M12 3l8 4v5c0 5-3.4 8.5-8 10-4.6-1.5-8-5-8-10V7z"/><path d="M9 12l2 2 4-4"/></svg></span>
-      <span class="arb-txt"><span class="arb-t">Admin dashboard</span>
-        <span class="arb-s">Organiser requests, platform overview</span></span>
-      <span class="arb-go">&rsaquo;</span>
-    </button>
-  </div>
+    <div class="subsection">
+      <h3>Community</h3>
+      <button class="action-row-btn" id="viewMyProfileBtn">
+        <span class="arb-ico"><svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21v-1a6 6 0 016-6h4a6 6 0 016 6v1"/></svg></span>
+        <span class="arb-txt"><span class="arb-t">My public player profile</span>
+          <span class="arb-s">Stats, teams and tournaments — shareable once you set a username</span></span>
+        <span class="arb-go">&rsaquo;</span>
+      </button>
+      <button class="action-row-btn" data-action="go-friends">
+        <span class="arb-ico"><svg viewBox="0 0 24 24"><circle cx="9" cy="8" r="3.5"/><path d="M2 20v-1a5 5 0 015-5h4a5 5 0 015 5v1"/></svg></span>
+        <span class="arb-txt"><span class="arb-t">Friends</span>
+          <span class="arb-s" id="friendsCountHint">Find and add players you know</span></span>
+        <span class="arb-go">&rsaquo;</span>
+      </button>
+      <button class="action-row-btn hidden" id="applyOrganiserBtn">
+        <span class="arb-ico"><svg viewBox="0 0 24 24"><path d="M6 4h12v5a6 6 0 01-12 0z"/><path d="M10 19h4M12 15v4"/></svg></span>
+        <span class="arb-txt"><span class="arb-t" id="applyOrganiserLabel">Apply to be an organiser</span>
+          <span class="arb-s" id="applyOrganiserSub">Run your own public tournaments</span></span>
+        <span class="arb-go">&rsaquo;</span>
+      </button>
+      <button class="action-row-btn hidden" id="goAdminBtn" data-action="go-admin">
+        <span class="arb-ico"><svg viewBox="0 0 24 24"><path d="M12 3l8 4v5c0 5-3.4 8.5-8 10-4.6-1.5-8-5-8-10V7z"/><path d="M9 12l2 2 4-4"/></svg></span>
+        <span class="arb-txt"><span class="arb-t">Admin dashboard</span>
+          <span class="arb-s">Organiser requests, platform overview</span></span>
+        <span class="arb-go">&rsaquo;</span>
+      </button>
+    </div>
 
-  <!-- Shown only to approved organisers. Real completed-tournament count,
-       computed client-side from this organiser's own tournaments — no lucky
-       draw eligibility exists yet server-side, so this is progress-only,
-       never a claim of having qualified for anything. -->
-  <div class="card hidden" id="organiserProgressCard">
-    <h2>&#127942; Organiser Progress</h2>
-    <div class="op-count" id="opCount">0 / 10 Successful Tournaments</div>
-    <div class="op-track"><div class="op-fill" id="opFill" style="width:0%;"></div></div>
-    <div class="stat-dim" id="opNote" style="margin-top:8px;"></div>
-    <div class="stat-dim hidden" id="opVerifiedNote" style="margin-top:4px;"></div>
-  </div>
+    <!-- Shown only to approved organisers. Real completed-tournament count,
+         computed client-side from this organiser's own tournaments — no lucky
+         draw eligibility exists yet server-side, so this is progress-only,
+         never a claim of having qualified for anything. -->
+    <div class="subsection hidden" id="organiserProgressCard">
+      <h3>&#127942; Organiser Progress</h3>
+      <div class="op-count" id="opCount">0 / 10 Successful Tournaments</div>
+      <div class="op-track"><div class="op-fill" id="opFill" style="width:0%;"></div></div>
+      <div class="stat-dim" id="opNote" style="margin-top:8px;"></div>
+      <div class="stat-dim hidden" id="opVerifiedNote" style="margin-top:4px;"></div>
+    </div>
 
-  <!-- Shown only when this account holds a non-owner tournament role
-       (manager/scorer/official) granted by an organiser — owned tournaments
-       already show under My Tournaments, so this card stays hidden and
-       empty for the vast majority of users until someone actually assigns
-       them a role. Read-only for now: management tools land in a later
-       phase, this is just visibility that the grant exists. -->
-  <div class="card hidden" id="tourRolesCard">
-    <h2>Tournament Roles</h2>
-    <div class="stat-dim" style="margin-bottom:8px;">Tournaments where you've been given a role by an organiser</div>
-    <div id="tourRolesList"></div>
-  </div>
+    <!-- Shown only when this account holds a non-owner tournament role
+         (manager/scorer/official) granted by an organiser — owned tournaments
+         already show under My Tournaments, so this card stays hidden and
+         empty for the vast majority of users until someone actually assigns
+         them a role. Read-only for now: management tools land in a later
+         phase, this is just visibility that the grant exists. -->
+    <div class="subsection hidden" id="tourRolesCard">
+      <h3>Tournament Roles</h3>
+      <div class="stat-dim" style="margin-bottom:8px;">Tournaments where you've been given a role by an organiser</div>
+      <div id="tourRolesList"></div>
+    </div>
 
-  <!-- Tournament Organizer Control Center — Phase 5. Team invites awaiting
-       this account's own response — accept/decline right from here without
-       having to find the tournament first. -->
-  <div class="card hidden" id="teamInvitesCard">
-    <h2>Team Invites</h2>
-    <div id="teamInvitesList"></div>
+    <!-- Tournament Organizer Control Center — Phase 5. Team invites awaiting
+         this account's own response — accept/decline right from here without
+         having to find the tournament first. -->
+    <div class="subsection hidden" id="teamInvitesCard">
+      <h3>Team Invites</h3>
+      <div id="teamInvitesList"></div>
+    </div>
   </div>
 
   <div class="screen-section-label">Support</div>
   <div class="card">
-    <h2>Notifications</h2>
-    <button class="action-row-btn" data-action="go-notifications">
-      <span class="arb-ico"><svg viewBox="0 0 24 24"><path d="M6 8a6 6 0 1112 0c0 5 2 6 2 6H4s2-1 2-6z"/><path d="M10 20a2 2 0 004 0"/></svg></span>
-      <span class="arb-txt"><span class="arb-t">Notification Center</span>
-        <span class="arb-s" id="profileNotifCountHint">Announcements, tournament and match updates</span></span>
-      <span class="arb-go">&rsaquo;</span>
-    </button>
-  </div>
+    <div class="subsection">
+      <h3>Notifications</h3>
+      <button class="action-row-btn" data-action="go-notifications">
+        <span class="arb-ico"><svg viewBox="0 0 24 24"><path d="M6 8a6 6 0 1112 0c0 5 2 6 2 6H4s2-1 2-6z"/><path d="M10 20a2 2 0 004 0"/></svg></span>
+        <span class="arb-txt"><span class="arb-t">Notification Center</span>
+          <span class="arb-s" id="profileNotifCountHint">Announcements, tournament and match updates</span></span>
+        <span class="arb-go">&rsaquo;</span>
+      </button>
+    </div>
 
-  <div class="card hidden" id="feedbackCard">
-    <h2>Feedback</h2>
-    <button class="action-row-btn" id="goFeedbackBtn">
-      <span class="arb-ico"><svg viewBox="0 0 24 24"><path d="M4 4h16v12H8l-4 4V4z"/></svg></span>
-      <span class="arb-txt"><span class="arb-t">Feedback</span>
-        <span class="arb-s">Tell us what you think about Cricket Connect</span></span>
-      <span class="arb-go">&rsaquo;</span>
-    </button>
-  </div>
+    <div class="subsection hidden" id="feedbackCard">
+      <h3>Feedback</h3>
+      <button class="action-row-btn" id="goFeedbackBtn">
+        <span class="arb-ico"><svg viewBox="0 0 24 24"><path d="M4 4h16v12H8l-4 4V4z"/></svg></span>
+        <span class="arb-txt"><span class="arb-t">Feedback</span>
+          <span class="arb-s">Tell us what you think about Cricket Connect</span></span>
+        <span class="arb-go">&rsaquo;</span>
+      </button>
+    </div>
 
-  <div class="card">
-    <h2>Data</h2>
-    <a href="./privacy.html" class="action-row-btn" style="text-decoration:none;">
-      <span class="arb-ico"><svg viewBox="0 0 24 24"><path d="M12 3l8 4v5c0 5-3.4 8.5-8 10-4.6-1.5-8-5-8-10V7z"/></svg></span>
-      <span class="arb-txt"><span class="arb-t">Privacy policy</span>
-        <span class="arb-s">What we store and why</span></span>
-      <span class="arb-go">&rsaquo;</span>
-    </a>
+    <div class="subsection">
+      <h3>Data</h3>
+      <a href="./privacy.html" class="action-row-btn" style="text-decoration:none;">
+        <span class="arb-ico"><svg viewBox="0 0 24 24"><path d="M12 3l8 4v5c0 5-3.4 8.5-8 10-4.6-1.5-8-5-8-10V7z"/></svg></span>
+        <span class="arb-txt"><span class="arb-t">Privacy policy</span>
+          <span class="arb-s">What we store and why</span></span>
+        <span class="arb-go">&rsaquo;</span>
+      </a>
+    </div>
   </div>
 
   <div class="screen-section-label">About</div>
