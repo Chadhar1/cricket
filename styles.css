@@ -131,6 +131,21 @@ input:focus, textarea:focus, select:focus{
 .row{display:flex; gap:10px;}
 .row > *{flex:1; min-width:0;}
 
+/* Password show/hide toggle. Wraps a password <input> so the eye button can
+   sit inside the field without a layout change to the surrounding form --
+   used on login/signup and the "set new password" recovery modal. */
+.pw-field{position:relative;}
+.pw-field input{padding-right:44px;}
+.pw-toggle{
+  position:absolute; right:2px; top:50%; transform:translateY(-50%);
+  width:36px; height:36px; border:none; background:none; cursor:pointer;
+  display:flex; align-items:center; justify-content:center; color:var(--ink-dim);
+  padding:0; border-radius:8px; font-family:inherit;
+}
+.pw-toggle:hover{color:var(--ink);}
+.pw-toggle:active{background:rgba(255,255,255,0.08);}
+.pw-toggle svg{width:19px; height:19px; fill:none; stroke:currentColor; stroke-width:1.8; stroke-linecap:round; stroke-linejoin:round;}
+
 .btn{
   display:block; width:100%; padding:13px; border-radius:12px; border:none;
   font-size:15px; font-weight:700; cursor:pointer; margin-top:14px; font-family:inherit;

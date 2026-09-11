@@ -26,6 +26,10 @@ import { AVATARS, DEFAULT_AVATAR, avatarSVG, initialsBadge, brandMark, brandLock
 import { resolveTeamLogoMarkup, loadTeamLogoImage } from './team-logos.js';
 import { reportBallEvents, reportMatchComplete } from './broadcast-events.js';
 import { showFlashPop } from './flash-pop.js';
+import {
+  isBiometricSupported, isBiometricEnabledForUser,
+  enableBiometricUnlock, disableBiometricUnlock, verifyBiometricUnlock
+} from './biometric-unlock.js';
 import { TEMPLATES, buildOverlayState, templateThumbnailSVG } from './overlays.js';
 import * as recorder from './recorder.js';
 
@@ -591,6 +595,27 @@ async function doReset(){
   }catch(err){ authMsg(authErrorText(err)); }
 }
 
+/* Show/hide password toggle. One pair of inline SVGs swapped on the button
+   itself (open eye = currently hidden, tap to reveal; slashed eye =
+   currently visible, tap to hide) rather than a font-icon dependency.
+   wirePasswordToggle() is generic so it works for the login field and, since
+   the "set new password" recovery modal's two password fields don't exist
+   in the DOM until openResetPasswordModal() runs, gets called again from
+   there each time that modal opens. */
+const EYE_SVG = '<svg viewBox="0 0 24 24"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7z"/><circle cx="12" cy="12" r="3"/></svg>';
+const EYE_OFF_SVG = '<svg viewBox="0 0 24 24"><path d="M3 3l18 18"/><path d="M10.6 5.2A11 11 0 0 1 12 5c7 0 11 7 11 7a13.5 13.5 0 0 1-3.1 3.8M6.6 6.6A13.6 13.6 0 0 0 1 12s4 7 11 7a10.9 10.9 0 0 0 5.4-1.4"/><path d="M9.9 9.9a3 3 0 0 0 4.2 4.2"/></svg>';
+function wirePasswordToggle(btnId, inputId){
+  const btn = $(btnId), input = $(inputId);
+  if(!btn || !input) return;
+  btn.innerHTML = EYE_SVG;
+  btn.onclick = ()=>{
+    const nowHidden = input.type === 'password';
+    input.type = nowHidden ? 'text' : 'password';
+    btn.innerHTML = nowHidden ? EYE_OFF_SVG : EYE_SVG;
+    btn.setAttribute('aria-label', nowHidden ? 'Hide password' : 'Show password');
+  };
+}
+
 /* Opened once when boot() detects a PASSWORD_RECOVERY session (the user
    followed a valid, unexpired reset-email link) — see onPasswordRecovery()
    in cloud.js. The recovery link itself already signed them in with a
@@ -601,11 +626,19 @@ function openResetPasswordModal(){
   openModal(`<h3>Set a new password</h3>
     <div class="stat-dim" style="margin-bottom:10px;">You followed a password reset link. Choose a new password to finish.</div>
     <label>New password</label>
-    <input type="password" id="newPasswordInput" placeholder="At least 6 characters" autocomplete="new-password">
+    <div class="pw-field">
+      <input type="password" id="newPasswordInput" placeholder="At least 6 characters" autocomplete="new-password">
+      <button type="button" class="pw-toggle" id="newPasswordToggle" aria-label="Show password" tabindex="-1"></button>
+    </div>
     <label style="margin-top:10px;">Confirm password</label>
-    <input type="password" id="newPasswordConfirm" placeholder="Type it again" autocomplete="new-password">
+    <div class="pw-field">
+      <input type="password" id="newPasswordConfirm" placeholder="Type it again" autocomplete="new-password">
+      <button type="button" class="pw-toggle" id="newPasswordConfirmToggle" aria-label="Show password" tabindex="-1"></button>
+    </div>
     <div class="stat-dim" id="newPasswordMsg" style="margin-top:8px;"></div>
     <button class="btn primary" data-action="submit-new-password" style="margin-top:14px;">Set password</button>`);
+  wirePasswordToggle('newPasswordToggle', 'newPasswordInput');
+  wirePasswordToggle('newPasswordConfirmToggle', 'newPasswordConfirm');
 }
 
 async function submitNewPasswordAction(){
@@ -701,6 +734,95 @@ function renderPushToggle(){
   $('pushToggleHint').textContent = permission === 'denied'
     ? 'Blocked in your browser settings — enable notifications for this site there first.'
     : 'Get notified even when the app is closed';
+}
+
+/* Biometric "quick unlock" toggle (Account page). Hidden entirely unless
+   signed in AND this device actually reports a usable platform
+   authenticator (isBiometricSupported() is async, so this row starts
+   hidden and only reveals itself once that check resolves — never shows a
+   toggle that would just fail on tap). See biometric-unlock.js's header
+   comment for exactly what this does and doesn't guarantee. */
+async function renderBiometricToggle(){
+  const row = $('biometricToggleRow');
+  if(!row) return;
+  const u = getUser();
+  if(!u){ row.classList.add('hidden'); return; }
+  const supported = await isBiometricSupported();
+  // Bail if the user signed out (or the screen moved on) while this await
+  // was in flight, or the row is gone for some other reason.
+  if(!$('biometricToggleRow') || !getUser()) return;
+  if(!supported){ row.classList.add('hidden'); return; }
+  row.classList.remove('hidden');
+  $('biometricToggle').checked = isBiometricEnabledForUser(u.id);
+}
+
+async function onBiometricToggleChange(e){
+  const cb = e.target;
+  const u = getUser();
+  if(!u){ cb.checked = false; return; }
+  if(cb.checked){
+    try{
+      const ok = await enableBiometricUnlock(u.id, u.email);
+      if(!ok){ cb.checked = false; toast('Could not enable — try again.'); return; }
+      toast('Fingerprint/face unlock enabled on this device');
+    }catch(err){
+      console.error('enableBiometricUnlock failed:', err);
+      cb.checked = false;
+      toast('Could not enable — try again.');
+    }
+  } else {
+    disableBiometricUnlock();
+    toast('Fingerprint/face unlock turned off');
+  }
+}
+
+/* ---------------- biometric unlock gate ----------------
+   A non-dismissible modal shown once per page load (see biometricGateChecked
+   below) right after boot() sees a signed-in user whose Supabase session was
+   restored from localStorage, but only if that user previously turned on
+   "Fingerprint / Face unlock" in Account. openModal() has no click-outside
+   or Escape handler anywhere in this file, so it's safe to reuse here as a
+   genuine lock screen -- the only ways out are a successful biometric check
+   or the explicit sign-out escape hatch below. */
+
+let biometricGateChecked = false;
+let _biometricLockResolve = null;
+
+function renderBiometricLockScreen(failed){
+  openModal(`
+    <h3>Unlock CricketConnect</h3>
+    <div class="stat-dim" style="margin-bottom:14px;">Use your fingerprint or face to continue.</div>
+    ${failed ? '<div class="stat-dim" style="margin-bottom:10px;">Not verified &mdash; try again.</div>' : ''}
+    <button class="btn primary" data-action="biometric-retry" style="margin-bottom:10px;">Try again</button>
+    <button class="link-btn" data-action="biometric-signout-instead">Sign out and use password instead</button>
+  `);
+}
+
+async function attemptBiometricUnlock(){
+  const ok = await verifyBiometricUnlock();
+  if(ok){
+    closeModal();
+    if(_biometricLockResolve){ const r = _biometricLockResolve; _biometricLockResolve = null; r(true); }
+  } else {
+    renderBiometricLockScreen(true);
+  }
+}
+
+async function biometricSignOutInsteadAction(){
+  closeModal();
+  try{ await disablePushNotifications(); }catch(err){}
+  await signOutUser();
+  toast('Signed out');
+  if(_biometricLockResolve){ const r = _biometricLockResolve; _biometricLockResolve = null; r(false); }
+}
+
+// Resolves true once unlocked, or false if the user chose to sign out instead.
+function presentBiometricLock(){
+  return new Promise((resolve)=>{
+    _biometricLockResolve = resolve;
+    renderBiometricLockScreen(false);
+    attemptBiometricUnlock();
+  });
 }
 
 /* ---------------- notification center ----------------
@@ -1012,6 +1134,7 @@ function renderProfile(){
   $('goAdminBtn').classList.toggle('hidden', !isAdminUser);
   $('feedbackCard').classList.toggle('hidden', !isSignedIn());
   renderPushToggle();
+  renderBiometricToggle();
 
   // Organiser Progress — real count of this organiser's own tournaments that
   // have genuinely finished (deriveStatus checks tournamentChampion(t), not
@@ -6095,6 +6218,7 @@ function bind(){
   $('authSubmitBtn').addEventListener('click', submitAuth);
   $('googleBtn').addEventListener('click', doGoogle);
   $('forgotBtn').addEventListener('click', doReset);
+  wirePasswordToggle('authPasswordToggle', 'authPassword');
   $('authPassword').addEventListener('keydown', e=>{ if(e.key === 'Enter') submitAuth(); });
 
   // home
@@ -6241,6 +6365,7 @@ function bind(){
     }
     renderPushToggle();
   });
+  $('biometricToggle').addEventListener('change', onBiometricToggleChange);
 
   // result
   $('resultBack').addEventListener('click', ()=>{ historyViewId = null; go('home'); });
@@ -7658,6 +7783,8 @@ function bind(){
     else if(a === 'open-announce-tour') openAnnounceTourModal();
     else if(a === 'send-announce-tour') sendAnnounceTourAction();
     else if(a === 'submit-new-password') submitNewPasswordAction();
+    else if(a === 'biometric-retry') attemptBiometricUnlock();
+    else if(a === 'biometric-signout-instead') biometricSignOutInsteadAction();
     else if(a === 'open-report-dispute') openReportDisputeModal();
     else if(a === 'submit-dispute') submitDisputeAction();
     else if(a === 'resolve-dispute') resolveDisputeAction(el.dataset.id, el.dataset.status);
@@ -7788,6 +7915,18 @@ async function boot(){
     onPasswordRecovery(()=>openResetPasswordModal());
     onAuth(async (user)=>{
       if(user){
+        if(!biometricGateChecked){
+          biometricGateChecked = true;
+          if(isBiometricEnabledForUser(user.id)){
+            const unlocked = await presentBiometricLock();
+            if(!unlocked){
+              // Signed out via the escape hatch instead -- signOutUser()
+              // fires its own SIGNED_OUT event, which re-enters this same
+              // onAuth callback with user=null and does the real cleanup.
+              return;
+            }
+          }
+        }
         const p = await fetchProfile();
         if(p) profile = {
           displayName: p.displayName || profile.displayName,

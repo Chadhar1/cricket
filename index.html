@@ -118,7 +118,10 @@
       <label>Email</label>
       <input type="text" id="authEmail" placeholder="you@example.com" autocomplete="email" inputmode="email">
       <label>Password</label>
-      <input type="password" id="authPassword" placeholder="At least 6 characters" autocomplete="current-password">
+      <div class="pw-field">
+        <input type="password" id="authPassword" placeholder="At least 6 characters" autocomplete="current-password">
+        <button type="button" class="pw-toggle" id="authPasswordToggle" aria-label="Show password" tabindex="-1"></button>
+      </div>
 
       <button class="btn" id="authSubmitBtn">Sign in</button>
       <button class="link-btn" id="forgotBtn">Forgot your password?</button>
@@ -1016,6 +1019,13 @@
         <div class="stat-dim" id="pushToggleHint">Get notified even when the app is closed</div>
       </div>
       <label class="switch"><input type="checkbox" id="pushToggle"><span class="slider"></span></label>
+    </div>
+    <div class="toggle-line hidden" id="biometricToggleRow" style="margin-top:10px;">
+      <div>
+        <div class="batter-name">Fingerprint / Face unlock</div>
+        <div class="stat-dim">Unlock the app on this device instead of typing your password</div>
+      </div>
+      <label class="switch"><input type="checkbox" id="biometricToggle"><span class="slider"></span></label>
     </div>
   </div>
 
