@@ -787,6 +787,11 @@ async function onBiometricToggleChange(e){
 
 let biometricGateChecked = false;
 let _biometricLockResolve = null;
+// Set true the moment boot() detects this page load is a password-recovery
+// link (see the onPasswordRecovery() call in boot() below) -- checked by
+// the gate so a recovery sign-in never gets stopped by, or overwrites,
+// another modal on top of the reset-password one it needs to show.
+let isRecoverySession = false;
 
 function renderBiometricLockScreen(failed){
   openModal(`
@@ -7912,10 +7917,20 @@ async function boot(){
     // not a screen, so it layers over whatever screen boot() would have
     // otherwise landed on (still 'home' underneath) rather than needing its
     // own route.
-    onPasswordRecovery(()=>openResetPasswordModal());
+    //
+    // isRecoverySession also gates the biometric lock screen below — both
+    // it and the reset-password modal render into the same #modalRoot, so
+    // without this check, an account with biometric unlock turned on would
+    // have presentBiometricLock() silently overwrite the reset modal right
+    // after it opened (same tick, since onPasswordRecovery is registered
+    // and replays before onAuth below does). Recovery links already prove
+    // "you own this email inbox" on their own, so skipping the extra
+    // fingerprint gate here doesn't weaken anything -- it's the same trust
+    // level a full sign-out + fresh password login would get.
+    onPasswordRecovery(()=>{ isRecoverySession = true; openResetPasswordModal(); });
     onAuth(async (user)=>{
       if(user){
-        if(!biometricGateChecked){
+        if(!biometricGateChecked && !isRecoverySession){
           biometricGateChecked = true;
           if(isBiometricEnabledForUser(user.id)){
             const unlocked = await presentBiometricLock();
