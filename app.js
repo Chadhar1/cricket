@@ -1209,8 +1209,26 @@ function renderProfile(){
   const who = $('authWho'), btn = $('authActionBtn');
   if(!cloudReady()){
     who.innerHTML = '<span class="dot offline"></span>Local only &middot; not connected';
-    btn.textContent = 'How to connect';
-    btn.onclick = ()=>toast('This build is not connected to an account yet — contact support if this persists');
+    btn.textContent = 'Retry connection';
+    // initCloud() only ever runs once, at boot() -- if that happened to lose
+    // the race against the network (cold start, weak signal, DNS still
+    // resolving) the whole session was permanently stuck local-only with no
+    // way back in except force-closing the app. Retrying here just calls it
+    // again on demand; safe to call more than once since it only flips
+    // `ready` and attaches listeners, it doesn't duplicate any state.
+    btn.onclick = async ()=>{
+      btn.disabled = true;
+      btn.textContent = 'Connecting…';
+      const ok = await initCloud();
+      btn.disabled = false;
+      if(ok){
+        toast('Connected');
+        renderProfile();
+      } else {
+        toast('Still not connected — check your internet connection and try again');
+        btn.textContent = 'Retry connection';
+      }
+    };
   } else if(u){
     who.innerHTML = '<span class="dot online"></span>Synced as <b>' + esc(u.email || displayName()) + '</b>';
     btn.textContent = 'Sign out';
