@@ -5,7 +5,7 @@
 
    After you deploy a change, bump VERSION so phones fetch the new files. */
 
-const VERSION = 'v26';
+const VERSION = 'v27';
 const CACHE = 'cricket-connect-' + VERSION;
 
 const SHELL = [

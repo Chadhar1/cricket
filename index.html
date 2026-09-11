@@ -850,6 +850,30 @@
     </div>
   </div>
 
+  <div class="screen-section-label">Account &amp; Security</div>
+  <div class="card">
+    <h2>Account</h2>
+    <div class="authbar" style="margin:0;">
+      <div class="who" id="authWho"><span class="dot offline"></span>Local only</div>
+    </div>
+    <button class="btn secondary" id="authActionBtn">Sign in</button>
+    <div class="toggle-line" id="pushToggleRow" style="margin-top:14px;">
+      <div>
+        <div class="batter-name">Push notifications</div>
+        <div class="stat-dim" id="pushToggleHint">Get notified even when the app is closed</div>
+      </div>
+      <label class="switch"><input type="checkbox" id="pushToggle"><span class="slider"></span></label>
+    </div>
+    <div class="toggle-line hidden" id="biometricToggleRow" style="margin-top:10px;">
+      <div>
+        <div class="batter-name">Fingerprint / Face unlock</div>
+        <div class="stat-dim">Unlock the app on this device instead of typing your password</div>
+      </div>
+      <label class="switch"><input type="checkbox" id="biometricToggle"><span class="slider"></span></label>
+    </div>
+  </div>
+
+  <div class="screen-section-label">Your Profile</div>
   <div class="card">
     <h2>My Cricket</h2>
     <button class="action-row-btn" data-action="go-stats">
@@ -959,26 +983,9 @@
     <button class="btn" id="saveProfileBtn">Save Profile</button>
   </div>
 
+  <div class="screen-section-label">Community</div>
   <div class="card">
-    <h2>Account</h2>
-    <div class="authbar" style="margin:0;">
-      <div class="who" id="authWho"><span class="dot offline"></span>Local only</div>
-    </div>
-    <button class="btn secondary" id="authActionBtn">Sign in</button>
-  </div>
-
-  <div class="card hidden" id="installCard">
-    <h2>Get the app</h2>
-    <button class="action-row-btn" id="installRowBtn">
-      <span class="arb-ico"><svg viewBox="0 0 24 24"><rect x="7" y="2" width="10" height="20" rx="2.2"/><path d="M11 18h2"/></svg></span>
-      <span class="arb-txt"><span class="arb-t" id="installRowTitle">Install Cricket Connect</span>
-        <span class="arb-s" id="installRowSub">Full screen, works without signal</span></span>
-      <span class="arb-go">&rsaquo;</span>
-    </button>
-  </div>
-
-  <div class="card">
-    <h2>Social</h2>
+    <h2>Community</h2>
     <button class="action-row-btn" id="viewMyProfileBtn">
       <span class="arb-ico"><svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21v-1a6 6 0 016-6h4a6 6 0 016 6v1"/></svg></span>
       <span class="arb-txt"><span class="arb-t">My public player profile</span>
@@ -1003,30 +1010,6 @@
         <span class="arb-s">Organiser requests, platform overview</span></span>
       <span class="arb-go">&rsaquo;</span>
     </button>
-  </div>
-
-  <div class="card">
-    <h2>Notifications</h2>
-    <button class="action-row-btn" data-action="go-notifications">
-      <span class="arb-ico"><svg viewBox="0 0 24 24"><path d="M6 8a6 6 0 1112 0c0 5 2 6 2 6H4s2-1 2-6z"/><path d="M10 20a2 2 0 004 0"/></svg></span>
-      <span class="arb-txt"><span class="arb-t">Notification Center</span>
-        <span class="arb-s" id="profileNotifCountHint">Announcements, tournament and match updates</span></span>
-      <span class="arb-go">&rsaquo;</span>
-    </button>
-    <div class="toggle-line" id="pushToggleRow" style="margin-top:10px;">
-      <div>
-        <div class="batter-name">Push notifications</div>
-        <div class="stat-dim" id="pushToggleHint">Get notified even when the app is closed</div>
-      </div>
-      <label class="switch"><input type="checkbox" id="pushToggle"><span class="slider"></span></label>
-    </div>
-    <div class="toggle-line hidden" id="biometricToggleRow" style="margin-top:10px;">
-      <div>
-        <div class="batter-name">Fingerprint / Face unlock</div>
-        <div class="stat-dim">Unlock the app on this device instead of typing your password</div>
-      </div>
-      <label class="switch"><input type="checkbox" id="biometricToggle"><span class="slider"></span></label>
-    </div>
   </div>
 
   <!-- Shown only to approved organisers. Real completed-tournament count,
@@ -1061,6 +1044,17 @@
     <div id="teamInvitesList"></div>
   </div>
 
+  <div class="screen-section-label">Support</div>
+  <div class="card">
+    <h2>Notifications</h2>
+    <button class="action-row-btn" data-action="go-notifications">
+      <span class="arb-ico"><svg viewBox="0 0 24 24"><path d="M6 8a6 6 0 1112 0c0 5 2 6 2 6H4s2-1 2-6z"/><path d="M10 20a2 2 0 004 0"/></svg></span>
+      <span class="arb-txt"><span class="arb-t">Notification Center</span>
+        <span class="arb-s" id="profileNotifCountHint">Announcements, tournament and match updates</span></span>
+      <span class="arb-go">&rsaquo;</span>
+    </button>
+  </div>
+
   <div class="card hidden" id="feedbackCard">
     <h2>Feedback</h2>
     <button class="action-row-btn" id="goFeedbackBtn">
@@ -1079,6 +1073,17 @@
         <span class="arb-s">What we store and why</span></span>
       <span class="arb-go">&rsaquo;</span>
     </a>
+  </div>
+
+  <div class="screen-section-label">About</div>
+  <div class="card hidden" id="installCard">
+    <h2>Get the app</h2>
+    <button class="action-row-btn" id="installRowBtn">
+      <span class="arb-ico"><svg viewBox="0 0 24 24"><rect x="7" y="2" width="10" height="20" rx="2.2"/><path d="M11 18h2"/></svg></span>
+      <span class="arb-txt"><span class="arb-t" id="installRowTitle">Install Cricket Connect</span>
+        <span class="arb-s" id="installRowSub">Full screen, works without signal</span></span>
+      <span class="arb-go">&rsaquo;</span>
+    </button>
   </div>
 
   <div class="brand-footer">
