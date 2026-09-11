@@ -722,10 +722,30 @@ async function disablePushNotifications(){
    who enabled this last week. "denied" can only be undone by the user in
    their own browser's site settings; the toggle reflects that honestly
    instead of pretending a click could fix it. */
+/* The "Account & Security" card holds only the push + biometric toggles now
+   (identity/Sign-out moved to the bottom of the Profile screen). Neither
+   toggle is guaranteed to be visible -- Capacitor's WebView never reports
+   pushSupported() (no real service worker/PushManager there, see
+   copy-web.mjs) and never reports a usable platform authenticator for
+   biometrics either, so on that build BOTH rows can end up hidden at once.
+   Without this check the section would render as an empty box with just
+   padding -- call this after either toggle finishes (re)rendering so the
+   whole section disappears together instead of leaving that gap. */
+function refreshAccountSecurityVisibility(){
+  const pushRow = $('pushToggleRow');
+  const bioRow = $('biometricToggleRow');
+  const anyVisible = (pushRow && !pushRow.classList.contains('hidden')) ||
+                      (bioRow && !bioRow.classList.contains('hidden'));
+  const card = $('accountSecurityCard');
+  const label = $('accountSecurityLabel');
+  if(card) card.classList.toggle('hidden', !anyVisible);
+  if(label) label.classList.toggle('hidden', !anyVisible);
+}
+
 function renderPushToggle(){
   const row = $('pushToggleRow');
   if(!row) return;
-  if(!isSignedIn() || !pushSupported()){ row.classList.add('hidden'); return; }
+  if(!isSignedIn() || !pushSupported()){ row.classList.add('hidden'); refreshAccountSecurityVisibility(); return; }
   row.classList.remove('hidden');
   const cb = $('pushToggle');
   const permission = pushPermission();
@@ -734,6 +754,7 @@ function renderPushToggle(){
   $('pushToggleHint').textContent = permission === 'denied'
     ? 'Blocked in your browser settings — enable notifications for this site there first.'
     : 'Get notified even when the app is closed';
+  refreshAccountSecurityVisibility();
 }
 
 /* Biometric "quick unlock" toggle (Account page). Hidden entirely unless
@@ -746,14 +767,15 @@ async function renderBiometricToggle(){
   const row = $('biometricToggleRow');
   if(!row) return;
   const u = getUser();
-  if(!u){ row.classList.add('hidden'); return; }
+  if(!u){ row.classList.add('hidden'); refreshAccountSecurityVisibility(); return; }
   const supported = await isBiometricSupported();
   // Bail if the user signed out (or the screen moved on) while this await
   // was in flight, or the row is gone for some other reason.
   if(!$('biometricToggleRow') || !getUser()) return;
-  if(!supported){ row.classList.add('hidden'); return; }
+  if(!supported){ row.classList.add('hidden'); refreshAccountSecurityVisibility(); return; }
   row.classList.remove('hidden');
   $('biometricToggle').checked = isBiometricEnabledForUser(u.id);
+  refreshAccountSecurityVisibility();
 }
 
 async function onBiometricToggleChange(e){
