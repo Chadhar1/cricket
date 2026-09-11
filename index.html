@@ -838,8 +838,12 @@
     </div>
   </div>
 
+  <!-- Compact profile header -- avatar, name, sign-in status and (when
+       relevant) role/reward stats, all in one place. Tapping the avatar or
+       "Change photo" reveals the photo/avatar editor below rather than
+       showing the whole picker permanently. -->
   <div class="card" style="text-align:center;">
-    <div class="avatar-big-wrap" id="profileAvatarBig" style="margin-bottom:10px;"></div>
+    <div class="avatar-big-wrap" id="profileAvatarBig" data-action="toggle-avatar-editor" style="margin-bottom:10px;cursor:pointer;"></div>
     <div style="font-size:18px;font-weight:700;" id="profileName">Guest</div>
     <div class="stat-dim" id="profileEmail">Not signed in</div>
     <div class="stat-dim hidden" id="profileRoleLine" style="margin-top:2px;font-weight:600;color:var(--gold-soft);">Role: Administrator</div>
@@ -848,24 +852,28 @@
       <div class="stat-box"><div class="sv" id="profileStreak">0</div><div class="sl">Day streak</div></div>
       <div class="stat-box"><div class="sv" id="profileBestStreak">0</div><div class="sl">Best streak</div></div>
     </div>
+    <button class="link-btn" data-action="toggle-avatar-editor" style="margin-top:6px;">Change photo</button>
   </div>
 
-  <div class="screen-section-label" id="accountSecurityLabel">Account &amp; Security</div>
-  <div class="card" id="accountSecurityCard">
-    <div class="toggle-line" id="pushToggleRow">
-      <div>
-        <div class="batter-name">Push notifications</div>
-        <div class="stat-dim" id="pushToggleHint">Get notified even when the app is closed</div>
+  <!-- Photo/avatar editor -- same upload button, remove button, file input
+       and icon grid that always used to sit inline in the form; just
+       collapsed behind the header above until tapped open. -->
+  <div class="card hidden" id="avatarEditorSection">
+    <h3 style="margin:0 0 12px;font-size:14px;font-weight:600;color:var(--ink);">Change Photo</h3>
+    <div class="photo-pick">
+      <div class="photo-preview" id="photoPreview"></div>
+      <div class="photo-actions">
+        <div class="pa-t">Your picture</div>
+        <div class="pa-s">Upload from your gallery, or pick one of the icons below.</div>
+        <div class="photo-btns">
+          <button class="icon-btn" id="photoUploadBtn">Upload photo</button>
+          <button class="icon-btn hidden" id="photoRemoveBtn">Remove</button>
+        </div>
       </div>
-      <label class="switch"><input type="checkbox" id="pushToggle"><span class="slider"></span></label>
     </div>
-    <div class="toggle-line hidden" id="biometricToggleRow" style="margin-top:10px;">
-      <div>
-        <div class="batter-name">Fingerprint / Face unlock</div>
-        <div class="stat-dim">Unlock the app on this device instead of typing your password</div>
-      </div>
-      <label class="switch"><input type="checkbox" id="biometricToggle"><span class="slider"></span></label>
-    </div>
+    <input type="file" id="photoInput" accept="image/*" class="hidden">
+    <label>Or choose an icon</label>
+    <div class="avatar-grid" id="profileAvatarGrid"></div>
   </div>
 
   <div class="screen-section-label">Your Profile</div>
@@ -900,82 +908,84 @@
     <input type="text" id="profileHandleInput" placeholder="e.g. haris_23" maxlength="20" autocomplete="off">
     <div class="stat-dim" id="handleHint">Needed to find friends and to apply as an organiser. Letters, numbers and underscore only.</div>
 
-    <label>Your location</label>
-    <div class="stat-dim" style="margin:-2px 0 8px;">Helps us show you nearby tournaments and grounds.</div>
-    <div class="row">
-      <div>
-        <label>Country</label>
-        <input type="text" id="profileCountryInput" placeholder="e.g. Pakistan" maxlength="40" autocomplete="country-name">
+    <!-- Compact Location row -- taps open the same fields that used to sit
+         inline here (Country/Province/District/Area), unchanged otherwise. -->
+    <button class="action-row-btn" data-action="toggle-location-editor" style="margin-top:12px;">
+      <span class="arb-ico"><svg viewBox="0 0 24 24"><path d="M12 21s7-6.5 7-12a7 7 0 10-14 0c0 5.5 7 12 7 12z"/><circle cx="12" cy="9" r="2.5"/></svg></span>
+      <span class="arb-txt"><span class="arb-t">Location</span>
+        <span class="arb-s" id="locationSummary">Not set</span></span>
+      <span class="arb-go">&rsaquo;</span>
+    </button>
+    <div class="hidden" id="locationEditor" style="margin-top:10px;">
+      <div class="stat-dim" style="margin:-2px 0 8px;">Helps us show you nearby tournaments and grounds.</div>
+      <div class="row">
+        <div>
+          <label>Country</label>
+          <input type="text" id="profileCountryInput" placeholder="e.g. Pakistan" maxlength="40" autocomplete="country-name">
+        </div>
+        <div>
+          <label>Province / State / Emirate</label>
+          <input type="text" id="profileRegionInput" placeholder="e.g. Punjab, Sindh, Dubai" maxlength="40" autocomplete="address-level1">
+        </div>
       </div>
-      <div>
-        <label>Province / State / Emirate</label>
-        <input type="text" id="profileRegionInput" placeholder="e.g. Punjab, Sindh, Dubai" maxlength="40" autocomplete="address-level1">
-      </div>
-    </div>
-    <div class="row">
-      <div>
-        <label>District</label>
-        <input type="text" id="profileDistrictInput" placeholder="e.g. Lahore" maxlength="40" autocomplete="address-level2">
-      </div>
-      <div>
-        <label>Tehsil / Area</label>
-        <input type="text" id="profileAreaInput" placeholder="e.g. Model Town" maxlength="40" autocomplete="address-level3">
-      </div>
-    </div>
-
-    <label>Playing identity</label>
-    <div class="stat-dim" style="margin:-2px 0 8px;">Shown on your public profile and Top Players — set by you, not calculated.</div>
-    <div class="row">
-      <div>
-        <label>Primary role</label>
-        <select id="profilePrimaryRoleInput">
-          <option value="">Not set</option>
-          <option value="Batsman">Batsman</option>
-          <option value="Bowler">Bowler</option>
-          <option value="All-rounder">All-rounder</option>
-          <option value="Wicket-keeper">Wicket-keeper</option>
-        </select>
-      </div>
-      <div>
-        <label>Batting style</label>
-        <select id="profileBattingStyleInput">
-          <option value="">Not set</option>
-          <option value="Right-hand bat">Right-hand bat</option>
-          <option value="Left-hand bat">Left-hand bat</option>
-        </select>
-      </div>
-    </div>
-    <label>Bowling style</label>
-    <select id="profileBowlingStyleInput">
-      <option value="">Not set</option>
-      <option value="Right-arm fast">Right-arm fast</option>
-      <option value="Right-arm medium">Right-arm medium</option>
-      <option value="Right-arm off-break">Right-arm off-break</option>
-      <option value="Right-arm leg-break">Right-arm leg-break</option>
-      <option value="Left-arm fast">Left-arm fast</option>
-      <option value="Left-arm medium">Left-arm medium</option>
-      <option value="Left-arm orthodox">Left-arm orthodox</option>
-      <option value="Left-arm chinaman">Left-arm chinaman</option>
-      <option value="Does not bowl">Does not bowl</option>
-    </select>
-    <div class="stat-dim" id="playingIdentityHint" style="margin-top:4px;">Set a username above first — playing identity is part of your public profile.</div>
-
-    <label>Profile photo</label>
-    <div class="photo-pick">
-      <div class="photo-preview" id="photoPreview"></div>
-      <div class="photo-actions">
-        <div class="pa-t">Your picture</div>
-        <div class="pa-s">Upload from your gallery, or pick one of the icons below.</div>
-        <div class="photo-btns">
-          <button class="icon-btn" id="photoUploadBtn">Upload photo</button>
-          <button class="icon-btn hidden" id="photoRemoveBtn">Remove</button>
+      <div class="row">
+        <div>
+          <label>District</label>
+          <input type="text" id="profileDistrictInput" placeholder="e.g. Lahore" maxlength="40" autocomplete="address-level2">
+        </div>
+        <div>
+          <label>Tehsil / Area</label>
+          <input type="text" id="profileAreaInput" placeholder="e.g. Model Town" maxlength="40" autocomplete="address-level3">
         </div>
       </div>
     </div>
-    <input type="file" id="photoInput" accept="image/*" class="hidden">
 
-    <label>Or choose an icon</label>
-    <div class="avatar-grid" id="profileAvatarGrid"></div>
+    <!-- Compact Playing Identity row -- taps open the same three selects
+         that used to sit inline here, unchanged otherwise. -->
+    <button class="action-row-btn" data-action="toggle-playing-identity" style="margin-top:10px;">
+      <span class="arb-ico"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 3v18M3 12h18"/></svg></span>
+      <span class="arb-txt"><span class="arb-t">Playing identity</span>
+        <span class="arb-s" id="playingIdentitySummary">Not set</span></span>
+      <span class="arb-go">&rsaquo;</span>
+    </button>
+    <div class="hidden" id="playingIdentityEditor" style="margin-top:10px;">
+      <div class="stat-dim" style="margin:-2px 0 8px;">Shown on your public profile and Top Players — set by you, not calculated.</div>
+      <div class="row">
+        <div>
+          <label>Primary role</label>
+          <select id="profilePrimaryRoleInput">
+            <option value="">Not set</option>
+            <option value="Batsman">Batsman</option>
+            <option value="Bowler">Bowler</option>
+            <option value="All-rounder">All-rounder</option>
+            <option value="Wicket-keeper">Wicket-keeper</option>
+          </select>
+        </div>
+        <div>
+          <label>Batting style</label>
+          <select id="profileBattingStyleInput">
+            <option value="">Not set</option>
+            <option value="Right-hand bat">Right-hand bat</option>
+            <option value="Left-hand bat">Left-hand bat</option>
+          </select>
+        </div>
+      </div>
+      <label>Bowling style</label>
+      <select id="profileBowlingStyleInput">
+        <option value="">Not set</option>
+        <option value="Right-arm fast">Right-arm fast</option>
+        <option value="Right-arm medium">Right-arm medium</option>
+        <option value="Right-arm off-break">Right-arm off-break</option>
+        <option value="Right-arm leg-break">Right-arm leg-break</option>
+        <option value="Left-arm fast">Left-arm fast</option>
+        <option value="Left-arm medium">Left-arm medium</option>
+        <option value="Left-arm orthodox">Left-arm orthodox</option>
+        <option value="Left-arm chinaman">Left-arm chinaman</option>
+        <option value="Does not bowl">Does not bowl</option>
+      </select>
+      <div class="stat-dim" id="playingIdentityHint" style="margin-top:4px;">Set a username above first — playing identity is part of your public profile.</div>
+    </div>
+
     <button class="btn" id="saveProfileBtn">Save Profile</button>
     </div>
   </div>
@@ -1043,8 +1053,26 @@
     </div>
   </div>
 
-  <div class="screen-section-label">Support</div>
+  <div class="screen-section-label">Settings</div>
   <div class="card">
+    <div class="subsection" id="accountSecuritySubsection">
+      <h3>Security</h3>
+      <div class="toggle-line" id="pushToggleRow">
+        <div>
+          <div class="batter-name">Push notifications</div>
+          <div class="stat-dim" id="pushToggleHint">Get notified even when the app is closed</div>
+        </div>
+        <label class="switch"><input type="checkbox" id="pushToggle"><span class="slider"></span></label>
+      </div>
+      <div class="toggle-line hidden" id="biometricToggleRow" style="margin-top:10px;">
+        <div>
+          <div class="batter-name">Fingerprint / Face unlock</div>
+          <div class="stat-dim">Unlock the app on this device instead of typing your password</div>
+        </div>
+        <label class="switch"><input type="checkbox" id="biometricToggle"><span class="slider"></span></label>
+      </div>
+    </div>
+
     <div class="subsection">
       <h3>Notifications</h3>
       <button class="action-row-btn" data-action="go-notifications">

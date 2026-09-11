@@ -722,24 +722,24 @@ async function disablePushNotifications(){
    who enabled this last week. "denied" can only be undone by the user in
    their own browser's site settings; the toggle reflects that honestly
    instead of pretending a click could fix it. */
-/* The "Account & Security" card holds only the push + biometric toggles now
-   (identity/Sign-out moved to the bottom of the Profile screen). Neither
+/* The push + biometric toggles now live in a "Security" subsection inside
+   the merged Settings card (Notifications/Feedback/Data are the other
+   subsections there, always relevant regardless of toggle support). Neither
    toggle is guaranteed to be visible -- Capacitor's WebView never reports
    pushSupported() (no real service worker/PushManager there, see
    copy-web.mjs) and never reports a usable platform authenticator for
    biometrics either, so on that build BOTH rows can end up hidden at once.
-   Without this check the section would render as an empty box with just
-   padding -- call this after either toggle finishes (re)rendering so the
-   whole section disappears together instead of leaving that gap. */
+   Without this check the Security subsection would render as an empty box
+   with just its own padding -- call this after either toggle finishes
+   (re)rendering so just that subsection disappears, leaving the rest of
+   Settings (which is always meaningful) untouched. */
 function refreshAccountSecurityVisibility(){
   const pushRow = $('pushToggleRow');
   const bioRow = $('biometricToggleRow');
   const anyVisible = (pushRow && !pushRow.classList.contains('hidden')) ||
                       (bioRow && !bioRow.classList.contains('hidden'));
-  const card = $('accountSecurityCard');
-  const label = $('accountSecurityLabel');
-  if(card) card.classList.toggle('hidden', !anyVisible);
-  if(label) label.classList.toggle('hidden', !anyVisible);
+  const sub = $('accountSecuritySubsection');
+  if(sub) sub.classList.toggle('hidden', !anyVisible);
 }
 
 function renderPushToggle(){
@@ -1139,9 +1139,33 @@ function renderProfile(){
   $('profileRegionInput').value = profile.region || (myPublicProfile && myPublicProfile.region) || '';
   $('profileDistrictInput').value = profile.district || (myPublicProfile && myPublicProfile.district) || '';
   $('profileAreaInput').value = profile.area || (myPublicProfile && myPublicProfile.area) || '';
+  // Compact "Location" row summary -- same fallback order as the fields
+  // above (local `profile` wins over myPublicProfile), just collapsed into
+  // one line so the four separate inputs don't have to stay visible until
+  // the row is tapped open.
+  {
+    const locParts = [
+      profile.area || (myPublicProfile && myPublicProfile.area),
+      profile.district || (myPublicProfile && myPublicProfile.district),
+      profile.region || (myPublicProfile && myPublicProfile.region),
+      profile.country || (myPublicProfile && myPublicProfile.country)
+    ].filter(Boolean);
+    $('locationSummary').textContent = locParts.length ? locParts.join(', ') : 'Not set';
+  }
   $('profilePrimaryRoleInput').value = (myPublicProfile && myPublicProfile.primaryRole) || '';
   $('profileBattingStyleInput').value = (myPublicProfile && myPublicProfile.battingStyle) || '';
   $('profileBowlingStyleInput').value = (myPublicProfile && myPublicProfile.bowlingStyle) || '';
+  // Compact "Playing identity" row summary -- same collapsing idea as
+  // Location above, driven by the same myPublicProfile fields the three
+  // selects already use.
+  {
+    const piParts = [
+      myPublicProfile && myPublicProfile.primaryRole,
+      myPublicProfile && myPublicProfile.battingStyle,
+      myPublicProfile && myPublicProfile.bowlingStyle
+    ].filter(Boolean);
+    $('playingIdentitySummary').textContent = piParts.length ? piParts.join(' · ') : 'Not set';
+  }
   $('playingIdentityHint').classList.toggle('hidden', !!(myPublicProfile && myPublicProfile.handle));
   $('profileAvatarGrid').innerHTML = AVATARS.map(a=>
     `<div class="avatar-opt ${a.id === (profile.avatarId||DEFAULT_AVATAR) ? 'sel':''}" data-pavatar="${a.id}">${avatarSVG(a.id, 46)}</div>`).join('');
@@ -7830,6 +7854,14 @@ function bind(){
     else if(a === 'submit-new-password') submitNewPasswordAction();
     else if(a === 'biometric-retry') attemptBiometricUnlock();
     else if(a === 'biometric-signout-instead') biometricSignOutInsteadAction();
+    // Profile screen compact-row editors -- each toggles a hidden panel of
+    // already-existing fields open/closed rather than showing everything at
+    // once. Pure visibility toggles, no data ever moves: the actual inputs
+    // keep the same ids and the same save/load logic in renderProfile()
+    // and saveProfileAction() they always had.
+    else if(a === 'toggle-avatar-editor') $('avatarEditorSection').classList.toggle('hidden');
+    else if(a === 'toggle-location-editor') $('locationEditor').classList.toggle('hidden');
+    else if(a === 'toggle-playing-identity') $('playingIdentityEditor').classList.toggle('hidden');
     else if(a === 'open-report-dispute') openReportDisputeModal();
     else if(a === 'submit-dispute') submitDisputeAction();
     else if(a === 'resolve-dispute') resolveDisputeAction(el.dataset.id, el.dataset.status);
