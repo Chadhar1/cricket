@@ -409,9 +409,14 @@ function isSignedIn(){ return cloudReady() && !!getUser(); }
 function requiresAccount(){ return cloudReady(); }
 
 /* ---------------- navigation ---------------- */
-const SCREENS = ['auth','home','setup','live','result','history','teams','tournaments','tournament','stats','profile','friends','admin','player','live-now','feedback','notifications','ground','nearby'];
+const SCREENS = ['auth','home','setup','live','result','history','teams','tournaments','tournament','stats','profile','edit-profile','settings','friends','admin','player','live-now','feedback','notifications','ground','nearby'];
+/* 'edit-profile' and 'settings' both map to the profile tab: they are
+   sub-screens reached from Profile (see the Edit profile button and the
+   "Settings & privacy" row there), so the bottom nav should keep showing
+   Profile as the active tab while you're inside either of them. */
 const TAB_OF = { home:'home', tournaments:'tournaments', tournament:'tournaments', ground:'tournaments',
                  teams:'teams', stats:'profile', history:'history', profile:'profile',
+                 'edit-profile':'profile', settings:'profile',
                  friends:'friends', admin:'admin', 'live-now':'live-now', nearby:'home' };
 
 /* Every screen-level navigation in the app funnels through here (confirmed:
@@ -1129,6 +1134,16 @@ function renderProfile(){
     $('profilePoints').textContent = myPublicProfile.points || 0;
     $('profileStreak').textContent = myPublicProfile.streakCurrent || 0;
     $('profileBestStreak').textContent = myPublicProfile.streakLongest || 0;
+  }
+  /* @handle under the name on the Profile header -- hidden entirely rather
+     than showing an empty "@" for the many accounts that never set one. */
+  {
+    const handle = (myPublicProfile && myPublicProfile.handle) || '';
+    const handleLine = $('profileHandleLine');
+    if(handleLine){
+      handleLine.textContent = '@' + handle;
+      handleLine.classList.toggle('hidden', !handle);
+    }
   }
   $('profileNameInput').value = profile.displayName || (u && u.displayName) || '';
   $('profileHandleInput').value = (myPublicProfile && myPublicProfile.handle) || '';
@@ -6202,7 +6217,12 @@ const GATED = {
   tournaments:'run tournaments',
   stats:'see your records', history:'see your match history',
   friends:'find and add friends', admin:'manage the platform',
-  feedback:'leave feedback', notifications:'see your notifications'
+  feedback:'leave feedback', notifications:'see your notifications',
+  /* 'settings' is deliberately NOT gated: the sign-in entry point lives on
+     Profile, but Settings still holds things a signed-out visitor can
+     legitimately reach (privacy policy, install prompt, version), and the
+     rows that only make sense signed in already hide themselves. */
+  'edit-profile':'edit your profile'
 };
 
 function render(){
@@ -6235,7 +6255,14 @@ function render(){
     case 'ground': renderGround(); break;
     case 'nearby': renderNearby(); break;
     case 'stats': renderStats(); break;
+    /* All three share renderProfile(): it populates by element id, and the
+       ids it touches are now spread across these screens rather than all
+       sitting on one. Painting all of them on every visit costs nothing
+       (pure DOM writes, no fetches) and means the form and the settings
+       toggles are always current the moment their screen opens. */
     case 'profile': renderProfile(); break;
+    case 'edit-profile': renderProfile(); break;
+    case 'settings': renderProfile(); break;
     case 'friends': renderFriends(); break;
     case 'player': renderPlayerProfile(); break;
     case 'live-now': renderLiveNow(); break;
@@ -6448,8 +6475,12 @@ function bind(){
   // tournaments
   $('newTournamentBtn').addEventListener('click', openNewTournamentModal);
   $('tourBack').addEventListener('click', ()=>go('tournaments'));
-  $('feedbackBack').addEventListener('click', ()=>go('profile'));
+  // Feedback is now reached from Settings, so Back returns there rather than
+  // skipping a level up to Profile.
+  $('feedbackBack').addEventListener('click', ()=>go('settings'));
   $('notifBack').addEventListener('click', ()=>go('home'));
+  $('editProfileBack').addEventListener('click', ()=>go('profile'));
+  $('settingsBack').addEventListener('click', ()=>go('profile'));
   $('fbStars').addEventListener('click', e=>{
     const s = e.target.closest('[data-star]');
     if(!s) return;
@@ -7859,7 +7890,8 @@ function bind(){
     // once. Pure visibility toggles, no data ever moves: the actual inputs
     // keep the same ids and the same save/load logic in renderProfile()
     // and saveProfileAction() they always had.
-    else if(a === 'toggle-avatar-editor') $('avatarEditorSection').classList.toggle('hidden');
+    else if(a === 'go-edit-profile') go('edit-profile');
+    else if(a === 'go-settings') go('settings');
     else if(a === 'toggle-location-editor') $('locationEditor').classList.toggle('hidden');
     else if(a === 'toggle-playing-identity') $('playingIdentityEditor').classList.toggle('hidden');
     else if(a === 'open-report-dispute') openReportDisputeModal();

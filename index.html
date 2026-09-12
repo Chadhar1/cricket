@@ -833,18 +833,19 @@
       <span class="brand-mark" data-brandmark></span>
       <span class="brand-text">
         <span class="brand-name">Cricket <b>Connect</b></span>
-        <span class="brand-sub">ACCOUNT &amp; AVATAR</span>
+        <span class="brand-sub">PROFILE</span>
       </span>
     </div>
   </div>
 
-  <!-- Compact profile header -- avatar, name, sign-in status and (when
-       relevant) role/reward stats, all in one place. Tapping the avatar or
-       "Change photo" reveals the photo/avatar editor below rather than
-       showing the whole picker permanently. -->
+  <!-- Identity only. No form fields live on this screen any more -- editing
+       moved to #screen-edit-profile and everything configurable moved to
+       #screen-settings, so the Profile tab reads as "who I am + where to
+       go" instead of mixing a save-able form into a settings menu. -->
   <div class="card" style="text-align:center;">
-    <div class="avatar-big-wrap" id="profileAvatarBig" data-action="toggle-avatar-editor" style="margin-bottom:10px;cursor:pointer;"></div>
+    <div class="avatar-big-wrap" id="profileAvatarBig" data-action="go-edit-profile" style="margin-bottom:10px;cursor:pointer;"></div>
     <div style="font-size:18px;font-weight:700;" id="profileName">Guest</div>
+    <div class="stat-dim hidden" id="profileHandleLine">@username</div>
     <div class="stat-dim" id="profileEmail">Not signed in</div>
     <div class="stat-dim hidden" id="profileRoleLine" style="margin-top:2px;font-weight:600;color:var(--gold-soft);">Role: Administrator</div>
     <div class="stat-strip hidden" id="profileRewardsStrip" style="margin-top:12px;">
@@ -852,14 +853,120 @@
       <div class="stat-box"><div class="sv" id="profileStreak">0</div><div class="sl">Day streak</div></div>
       <div class="stat-box"><div class="sv" id="profileBestStreak">0</div><div class="sl">Best streak</div></div>
     </div>
-    <button class="link-btn" data-action="toggle-avatar-editor" style="margin-top:6px;">Change photo</button>
+    <button class="btn secondary" data-action="go-edit-profile" style="margin-top:14px;">Edit profile</button>
   </div>
 
-  <!-- Photo/avatar editor -- same upload button, remove button, file input
-       and icon grid that always used to sit inline in the form; just
-       collapsed behind the header above until tapped open. -->
-  <div class="card hidden" id="avatarEditorSection">
-    <h3 style="margin:0 0 12px;font-size:14px;font-weight:600;color:var(--ink);">Change Photo</h3>
+  <div class="card">
+    <button class="action-row-btn" id="viewMyProfileBtn">
+      <span class="arb-ico"><svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21v-1a6 6 0 016-6h4a6 6 0 016 6v1"/></svg></span>
+      <span class="arb-txt"><span class="arb-t">My public player profile</span>
+        <span class="arb-s">Stats, teams and tournaments &mdash; shareable once you set a username</span></span>
+      <span class="arb-go">&rsaquo;</span>
+    </button>
+    <button class="action-row-btn" data-action="go-stats">
+      <span class="arb-ico"><svg viewBox="0 0 24 24"><path d="M4 20V10M12 20V4M20 20v-7"/></svg></span>
+      <span class="arb-txt"><span class="arb-t">Statistics</span>
+        <span class="arb-s">Your batting and bowling numbers</span></span>
+      <span class="arb-go">&rsaquo;</span>
+    </button>
+    <button class="action-row-btn" data-action="go-history">
+      <span class="arb-ico"><svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M8 3v4M16 3v4M3 10h18"/></svg></span>
+      <span class="arb-txt"><span class="arb-t">Match history</span>
+        <span class="arb-s">Every match you've scored or played</span></span>
+      <span class="arb-go">&rsaquo;</span>
+    </button>
+    <button class="action-row-btn" data-action="go-teams">
+      <span class="arb-ico"><svg viewBox="0 0 24 24"><circle cx="9" cy="8" r="3"/><path d="M3 20v-1a5 5 0 015-5h2a5 5 0 015 5v1"/><circle cx="17" cy="9" r="2.5"/><path d="M16 14h1a4 4 0 014 4v2"/></svg></span>
+      <span class="arb-txt"><span class="arb-t">My teams</span>
+        <span class="arb-s">Teams you've created or joined</span></span>
+      <span class="arb-go">&rsaquo;</span>
+    </button>
+    <button class="action-row-btn" data-action="go-friends">
+      <span class="arb-ico"><svg viewBox="0 0 24 24"><circle cx="9" cy="8" r="3.5"/><path d="M2 20v-1a5 5 0 015-5h4a5 5 0 015 5v1"/></svg></span>
+      <span class="arb-txt"><span class="arb-t">Friends</span>
+        <span class="arb-s" id="friendsCountHint">Find and add players you know</span></span>
+      <span class="arb-go">&rsaquo;</span>
+    </button>
+    <button class="action-row-btn hidden" id="applyOrganiserBtn">
+      <span class="arb-ico"><svg viewBox="0 0 24 24"><path d="M6 4h12v5a6 6 0 01-12 0z"/><path d="M10 19h4M12 15v4"/></svg></span>
+      <span class="arb-txt"><span class="arb-t" id="applyOrganiserLabel">Apply to be an organiser</span>
+        <span class="arb-s" id="applyOrganiserSub">Run your own public tournaments</span></span>
+      <span class="arb-go">&rsaquo;</span>
+    </button>
+    <button class="action-row-btn hidden" id="goAdminBtn" data-action="go-admin">
+      <span class="arb-ico"><svg viewBox="0 0 24 24"><path d="M12 3l8 4v5c0 5-3.4 8.5-8 10-4.6-1.5-8-5-8-10V7z"/><path d="M9 12l2 2 4-4"/></svg></span>
+      <span class="arb-txt"><span class="arb-t">Admin dashboard</span>
+        <span class="arb-s">Organiser requests, platform overview</span></span>
+      <span class="arb-go">&rsaquo;</span>
+    </button>
+    <button class="action-row-btn" data-action="go-settings">
+      <span class="arb-ico"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.2"/><path d="M19.4 15a1.6 1.6 0 00.3 1.8l.1.1a2 2 0 11-2.8 2.8l-.1-.1a1.6 1.6 0 00-1.8-.3 1.6 1.6 0 00-1 1.5V21a2 2 0 11-4 0v-.1A1.6 1.6 0 008 19.4a1.6 1.6 0 00-1.8.3l-.1.1a2 2 0 11-2.8-2.8l.1-.1a1.6 1.6 0 00.3-1.8 1.6 1.6 0 00-1.5-1H2a2 2 0 110-4h.1A1.6 1.6 0 004.6 8a1.6 1.6 0 00-.3-1.8l-.1-.1a2 2 0 112.8-2.8l.1.1a1.6 1.6 0 001.8.3H9a1.6 1.6 0 001-1.5V2a2 2 0 114 0v.1a1.6 1.6 0 001 1.5 1.6 1.6 0 001.8-.3l.1-.1a2 2 0 112.8 2.8l-.1.1a1.6 1.6 0 00-.3 1.8V9a1.6 1.6 0 001.5 1H22a2 2 0 110 4h-.1a1.6 1.6 0 00-1.5 1z"/></svg></span>
+      <span class="arb-txt"><span class="arb-t">Settings &amp; privacy</span>
+        <span class="arb-s">Notifications, security, privacy and about</span></span>
+      <span class="arb-go">&rsaquo;</span>
+    </button>
+  </div>
+
+  <!-- Status cards below stay standalone (not subsections of one card) on
+       purpose: all three are hidden for the vast majority of accounts, and a
+       wrapper card around three hidden children would render as an empty box
+       with nothing but padding. -->
+
+  <!-- Shown only to approved organisers. Real completed-tournament count,
+       computed client-side from this organiser's own tournaments — no lucky
+       draw eligibility exists yet server-side, so this is progress-only,
+       never a claim of having qualified for anything. -->
+  <div class="card hidden" id="organiserProgressCard">
+    <h2>&#127942; Organiser Progress</h2>
+    <div class="op-count" id="opCount">0 / 10 Successful Tournaments</div>
+    <div class="op-track"><div class="op-fill" id="opFill" style="width:0%;"></div></div>
+    <div class="stat-dim" id="opNote" style="margin-top:8px;"></div>
+    <div class="stat-dim hidden" id="opVerifiedNote" style="margin-top:4px;"></div>
+  </div>
+
+  <!-- Shown only when this account holds a non-owner tournament role
+       (manager/scorer/official) granted by an organiser — owned tournaments
+       already show under My Tournaments, so this card stays hidden and
+       empty for the vast majority of users until someone actually assigns
+       them a role. Read-only for now: management tools land in a later
+       phase, this is just visibility that the grant exists. -->
+  <div class="card hidden" id="tourRolesCard">
+    <h2>Tournament Roles</h2>
+    <div class="stat-dim" style="margin-bottom:8px;">Tournaments where you've been given a role by an organiser</div>
+    <div id="tourRolesList"></div>
+  </div>
+
+  <!-- Tournament Organizer Control Center — Phase 5. Team invites awaiting
+       this account's own response — accept/decline right from here without
+       having to find the tournament first. -->
+  <div class="card hidden" id="teamInvitesCard">
+    <h2>Team Invites</h2>
+    <div id="teamInvitesList"></div>
+  </div>
+
+  <!-- Sign in / sign out stays on Profile rather than inside Settings: for a
+       signed-out visitor this is the screen's primary action, and burying it
+       one level deeper would hide the only way back into an account. -->
+  <div class="authbar" style="margin:24px 2px 0;">
+    <div class="who" id="authWho"><span class="dot offline"></span>Local only</div>
+  </div>
+  <button class="btn secondary" id="authActionBtn" style="margin:10px 2px 0;">Sign in</button>
+</div>
+
+<!-- ============================ EDIT PROFILE ============================ -->
+<div id="screen-edit-profile" class="hidden">
+  <button class="back-link" id="editProfileBack">&lsaquo; Profile</button>
+  <div class="topbar" style="padding-top:0;">
+    <div class="brand">
+      <span class="brand-mark" data-brandmark></span>
+      <span class="brand-text">
+        <span class="brand-name">Cricket <b>Connect</b></span>
+        <span class="brand-sub">EDIT PROFILE</span>
+      </span>
+    </div>
+  </div>
+
+  <div class="card">
     <div class="photo-pick">
       <div class="photo-preview" id="photoPreview"></div>
       <div class="photo-actions">
@@ -876,32 +983,8 @@
     <div class="avatar-grid" id="profileAvatarGrid"></div>
   </div>
 
-  <div class="screen-section-label">Settings</div>
-  <div class="card">
-    <div class="subsection">
-      <h3>My Cricket</h3>
-      <button class="action-row-btn" data-action="go-stats">
-        <span class="arb-ico"><svg viewBox="0 0 24 24"><path d="M4 20V10M12 20V4M20 20v-7"/></svg></span>
-        <span class="arb-txt"><span class="arb-t">Statistics</span>
-          <span class="arb-s">Your batting and bowling numbers</span></span>
-        <span class="arb-go">&rsaquo;</span>
-      </button>
-      <button class="action-row-btn" data-action="go-history">
-        <span class="arb-ico"><svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M8 3v4M16 3v4M3 10h18"/></svg></span>
-        <span class="arb-txt"><span class="arb-t">Match history</span>
-          <span class="arb-s">Every match you've scored or played</span></span>
-        <span class="arb-go">&rsaquo;</span>
-      </button>
-      <button class="action-row-btn" data-action="go-teams">
-        <span class="arb-ico"><svg viewBox="0 0 24 24"><circle cx="9" cy="8" r="3"/><path d="M3 20v-1a5 5 0 015-5h2a5 5 0 015 5v1"/><circle cx="17" cy="9" r="2.5"/><path d="M16 14h1a4 4 0 014 4v2"/></svg></span>
-        <span class="arb-txt"><span class="arb-t">My teams</span>
-          <span class="arb-s">Teams you've created or joined</span></span>
-        <span class="arb-go">&rsaquo;</span>
-      </button>
-    </div>
-
-    <div class="subsection" id="profileEditCard">
-      <h3>Your Details</h3>
+  <div class="card" id="profileEditCard">
+    <h2>Your Details</h2>
     <label>Display name</label>
     <input type="text" id="profileNameInput" placeholder="Your name" maxlength="30" autocomplete="name">
     <label>Username</label>
@@ -949,7 +1032,7 @@
       <span class="arb-go">&rsaquo;</span>
     </button>
     <div class="hidden" id="playingIdentityEditor" style="margin-top:10px;">
-      <div class="stat-dim" style="margin:-2px 0 8px;">Shown on your public profile and Top Players — set by you, not calculated.</div>
+      <div class="stat-dim" style="margin:-2px 0 8px;">Shown on your public profile and Top Players &mdash; set by you, not calculated.</div>
       <div class="row">
         <div>
           <label>Primary role</label>
@@ -983,72 +1066,27 @@
         <option value="Left-arm chinaman">Left-arm chinaman</option>
         <option value="Does not bowl">Does not bowl</option>
       </select>
-      <div class="stat-dim" id="playingIdentityHint" style="margin-top:4px;">Set a username above first — playing identity is part of your public profile.</div>
+      <div class="stat-dim" id="playingIdentityHint" style="margin-top:4px;">Set a username above first &mdash; playing identity is part of your public profile.</div>
     </div>
 
     <button class="btn" id="saveProfileBtn">Save Profile</button>
-    </div>
+  </div>
+</div>
 
-    <div class="subsection">
-      <h3>Community</h3>
-      <button class="action-row-btn" id="viewMyProfileBtn">
-        <span class="arb-ico"><svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21v-1a6 6 0 016-6h4a6 6 0 016 6v1"/></svg></span>
-        <span class="arb-txt"><span class="arb-t">My public player profile</span>
-          <span class="arb-s">Stats, teams and tournaments — shareable once you set a username</span></span>
-        <span class="arb-go">&rsaquo;</span>
-      </button>
-      <button class="action-row-btn" data-action="go-friends">
-        <span class="arb-ico"><svg viewBox="0 0 24 24"><circle cx="9" cy="8" r="3.5"/><path d="M2 20v-1a5 5 0 015-5h4a5 5 0 015 5v1"/></svg></span>
-        <span class="arb-txt"><span class="arb-t">Friends</span>
-          <span class="arb-s" id="friendsCountHint">Find and add players you know</span></span>
-        <span class="arb-go">&rsaquo;</span>
-      </button>
-      <button class="action-row-btn hidden" id="applyOrganiserBtn">
-        <span class="arb-ico"><svg viewBox="0 0 24 24"><path d="M6 4h12v5a6 6 0 01-12 0z"/><path d="M10 19h4M12 15v4"/></svg></span>
-        <span class="arb-txt"><span class="arb-t" id="applyOrganiserLabel">Apply to be an organiser</span>
-          <span class="arb-s" id="applyOrganiserSub">Run your own public tournaments</span></span>
-        <span class="arb-go">&rsaquo;</span>
-      </button>
-      <button class="action-row-btn hidden" id="goAdminBtn" data-action="go-admin">
-        <span class="arb-ico"><svg viewBox="0 0 24 24"><path d="M12 3l8 4v5c0 5-3.4 8.5-8 10-4.6-1.5-8-5-8-10V7z"/><path d="M9 12l2 2 4-4"/></svg></span>
-        <span class="arb-txt"><span class="arb-t">Admin dashboard</span>
-          <span class="arb-s">Organiser requests, platform overview</span></span>
-        <span class="arb-go">&rsaquo;</span>
-      </button>
+<!-- ============================== SETTINGS ============================== -->
+<div id="screen-settings" class="hidden">
+  <button class="back-link" id="settingsBack">&lsaquo; Profile</button>
+  <div class="topbar" style="padding-top:0;">
+    <div class="brand">
+      <span class="brand-mark" data-brandmark></span>
+      <span class="brand-text">
+        <span class="brand-name">Cricket <b>Connect</b></span>
+        <span class="brand-sub">SETTINGS &amp; PRIVACY</span>
+      </span>
     </div>
+  </div>
 
-    <!-- Shown only to approved organisers. Real completed-tournament count,
-         computed client-side from this organiser's own tournaments — no lucky
-         draw eligibility exists yet server-side, so this is progress-only,
-         never a claim of having qualified for anything. -->
-    <div class="subsection hidden" id="organiserProgressCard">
-      <h3>&#127942; Organiser Progress</h3>
-      <div class="op-count" id="opCount">0 / 10 Successful Tournaments</div>
-      <div class="op-track"><div class="op-fill" id="opFill" style="width:0%;"></div></div>
-      <div class="stat-dim" id="opNote" style="margin-top:8px;"></div>
-      <div class="stat-dim hidden" id="opVerifiedNote" style="margin-top:4px;"></div>
-    </div>
-
-    <!-- Shown only when this account holds a non-owner tournament role
-         (manager/scorer/official) granted by an organiser — owned tournaments
-         already show under My Tournaments, so this card stays hidden and
-         empty for the vast majority of users until someone actually assigns
-         them a role. Read-only for now: management tools land in a later
-         phase, this is just visibility that the grant exists. -->
-    <div class="subsection hidden" id="tourRolesCard">
-      <h3>Tournament Roles</h3>
-      <div class="stat-dim" style="margin-bottom:8px;">Tournaments where you've been given a role by an organiser</div>
-      <div id="tourRolesList"></div>
-    </div>
-
-    <!-- Tournament Organizer Control Center — Phase 5. Team invites awaiting
-         this account's own response — accept/decline right from here without
-         having to find the tournament first. -->
-    <div class="subsection hidden" id="teamInvitesCard">
-      <h3>Team Invites</h3>
-      <div id="teamInvitesList"></div>
-    </div>
-
+  <div class="card">
     <div class="subsection" id="accountSecuritySubsection">
       <h3>Security</h3>
       <div class="toggle-line" id="pushToggleRow">
@@ -1088,7 +1126,7 @@
     </div>
 
     <div class="subsection">
-      <h3>Data</h3>
+      <h3>Privacy</h3>
       <a href="./privacy.html" class="action-row-btn" style="text-decoration:none;">
         <span class="arb-ico"><svg viewBox="0 0 24 24"><path d="M12 3l8 4v5c0 5-3.4 8.5-8 10-4.6-1.5-8-5-8-10V7z"/></svg></span>
         <span class="arb-txt"><span class="arb-t">Privacy policy</span>
@@ -1098,7 +1136,6 @@
     </div>
   </div>
 
-  <div class="screen-section-label">About</div>
   <div class="card hidden" id="installCard">
     <h2>Get the app</h2>
     <button class="action-row-btn" id="installRowBtn">
@@ -1108,11 +1145,6 @@
       <span class="arb-go">&rsaquo;</span>
     </button>
   </div>
-
-  <div class="authbar" style="margin:24px 2px 0;">
-    <div class="who" id="authWho"><span class="dot offline"></span>Local only</div>
-  </div>
-  <button class="btn secondary" id="authActionBtn" style="margin:10px 2px 0;">Sign in</button>
 
   <div class="brand-footer">
     <div class="bf-name">Cricket Connect</div>
