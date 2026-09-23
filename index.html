@@ -185,6 +185,8 @@
     <div id="homeLiveRail"><div class="stat-dim">Loading…</div></div>
   </div>
 
+  <div class="qa-rail" id="qaRail"></div>
+
   <!-- ============ Upcoming Tournaments (public, real data via
        fetchPublicTournaments) ============ -->
   <div class="card" id="homeUpcomingTourCard">
@@ -226,8 +228,6 @@
     <div class="sec-head"><h2>Next Match</h2></div>
     <div id="nextMatchBox"></div>
   </div>
-
-  <div class="qa-rail" id="qaRail"></div>
 
   <!-- ============ My cricket stats (real career record, matched by display name) ============ -->
   <div class="card" id="homeMyStatsCard">
@@ -348,28 +348,11 @@
     <div class="ach-grid" id="achGrid"></div>
   </div>
 
-  <div class="quick-grid" style="margin-bottom:14px;">
-    <button class="quick-btn primary" id="qaNewMatch">
-      <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 8v8M8 12h8"/></svg>
-      <b>New Match</b><span>Start scoring right now</span>
-    </button>
-    <button class="quick-btn" id="qaTournament">
-      <svg viewBox="0 0 24 24"><path d="M6 4h12v5a6 6 0 01-12 0z"/><path d="M6 6H3v2a4 4 0 004 4M18 6h3v2a4 4 0 01-4 4"/><path d="M10 19h4M12 15v4"/></svg>
-      <b>Tournament</b><span>League table & knockouts</span>
-    </button>
-    <button class="quick-btn" id="qaTeams">
-      <svg viewBox="0 0 24 24"><circle cx="9" cy="8" r="3"/><path d="M3 20v-1a5 5 0 015-5h2a5 5 0 015 5v1"/><circle cx="17" cy="9" r="2.5"/><path d="M16 14h1a4 4 0 014 4v2"/></svg>
-      <b>Teams</b><span>Squads and players</span>
-    </button>
-    <button class="quick-btn" id="qaHistory">
-      <svg viewBox="0 0 24 24"><path d="M3 12a9 9 0 109-9 9 9 0 00-6.4 2.6L3 8"/><path d="M3 4v4h4M12 7v5l3 2"/></svg>
-      <b>History</b><span>Past results</span>
-    </button>
-    <button class="quick-btn" id="qaLiveNow">
-      <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="3" fill="currentColor" stroke="none"/></svg>
-      <b>Live Now</b><span>Matches being scored, by area</span>
-    </button>
-  </div>
+  <!-- ============ Standalone quick-grid block removed (2026-09 home
+       declutter pass) — it duplicated New Match/Tournament/Teams/History/
+       Live Now, all of which already exist in the QA rail near the top of
+       this screen. Live Now was folded into the QA array as qaLiveNow2 so
+       no destination was lost. ============ -->
 
   <div class="card">
     <div class="sec-head"><h2>Recent Results</h2>

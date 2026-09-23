@@ -2466,8 +2466,18 @@ const QA = [
   // You" (see openNearby()). Uses act, not go: openNearby() does a little
   // more than a bare screen switch (kicks off the country-filter fetch and
   // resumes an already-granted location without re-prompting).
-  { id:'qaNearby2',    label:'Cricket Near You', sub:'Grounds nearby', icon:'<circle cx="12" cy="10" r="3"/><path d="M12 21s-7-6.5-7-11a7 7 0 0114 0c0 4.5-7 11-7 11z"/>', act:'nearby' }
+  { id:'qaNearby2',    label:'Cricket Near You', sub:'Grounds nearby', icon:'<circle cx="12" cy="10" r="3"/><path d="M12 21s-7-6.5-7-11a7 7 0 0114 0c0 4.5-7 11-7 11z"/>', act:'nearby' },
+  // Folded in from the old standalone .quick-grid block at the bottom of the
+  // page (removed 2026-09 home declutter pass) so "Live Now" isn't lost —
+  // every other quick-grid destination already had an equivalent QA entry.
+  { id:'qaLiveNow2',   label:'Live Now',      sub:'Matches by area', icon:'<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="3" fill="currentColor" stroke="none"/>', go:'live-now' }
 ];
+
+// Only the first QA_VISIBLE items show by default; the rest sit behind the
+// "More" toggle in the rail (renderHeroAndRail) so Home doesn't dump 9
+// destinations on screen at once. Purely a display split — QA itself stays
+// one flat list so nothing else that reads it needs to change.
+const QA_VISIBLE = 4;
 
 function renderHeroAndRail(){
   const ms = mergedHistory().filter(m=>m.completed);
@@ -2482,11 +2492,15 @@ function renderHeroAndRail(){
   $('heroStats').innerHTML = cells.map(c=>
     `<div class="hero-stat"><div class="hs-v">${c.v}</div><div class="hs-l">${esc(c.l)}</div></div>`).join('');
 
-  $('qaRail').innerHTML = QA.map(q=>
-    `<button class="qa-item" data-qa="${q.id}">
+  $('qaRail').innerHTML = QA.map((q,i)=>
+    `<button class="qa-item${i >= QA_VISIBLE ? ' qa-extra hidden' : ''}" data-qa="${q.id}">
        <span class="qa-ico"><svg viewBox="0 0 24 24">${q.icon}</svg></span>
        <b>${esc(q.label)}</b><span>${esc(q.sub)}</span>
-     </button>`).join('');
+     </button>`).join('') +
+    (QA.length > QA_VISIBLE ? `<button class="qa-item qa-more" data-action="toggle-qa-more">
+       <span class="qa-ico"><svg viewBox="0 0 24 24"><circle cx="5" cy="12" r="1.6" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1.6" fill="currentColor" stroke="none"/><circle cx="19" cy="12" r="1.6" fill="currentColor" stroke="none"/></svg></span>
+       <b id="qaMoreLabel">More</b><span>${QA.length - QA_VISIBLE} more actions</span>
+     </button>` : '');
 
   // Welcome header — real, signed-in users only; guests keep the pitch copy.
   const u = getUser();
@@ -6321,7 +6335,6 @@ function bind(){
   $('homeProfile').addEventListener('click', ()=>go(getUser() || !cloudReady() ? 'profile' : 'auth'));
   $('resumeBanner').addEventListener('click', ()=>go('live'));
   $('addEventBtn').addEventListener('click', ()=>openScheduleModal());
-  $('qaNewMatch').addEventListener('click', ()=>{ setupPrefill = null; go('setup'); });
   $('heroFindTournaments').addEventListener('click', ()=>go('tournaments'));
   $('heroFindPlayers').addEventListener('click', ()=>go('friends'));
   // Previously identical to "Explore Tournaments" (both just opened the list) —
@@ -6342,10 +6355,10 @@ function bind(){
     if(match && !match.completed) go('live');
     else { setupPrefill = null; go('setup'); }
   });
-  $('qaTournament').addEventListener('click', ()=>go('tournaments'));
-  $('qaTeams').addEventListener('click', ()=>go('teams'));
-  $('qaHistory').addEventListener('click', ()=>go('history'));
-  $('qaLiveNow').addEventListener('click', ()=>go('live-now'));
+  // qaTournament/qaTeams/qaHistory/qaLiveNow/qaNewMatch buttons removed with
+  // the old standalone .quick-grid block (2026-09 home declutter pass) — all
+  // five destinations already have an equivalent entry in the QA rail array
+  // above, dispatched generically via the [data-qa] handler.
 
   // Cricket Near You (Nearby Grounds & Maps phase) — screen-nearby is a
   // static shell (like screen-live-now), present in the DOM from boot, so
@@ -7892,6 +7905,13 @@ function bind(){
     // and saveProfileAction() they always had.
     else if(a === 'go-edit-profile') go('edit-profile');
     else if(a === 'go-settings') go('settings');
+    else if(a === 'toggle-qa-more'){
+      const rail = $('qaRail');
+      const extras = rail ? rail.querySelectorAll('.qa-extra') : [];
+      const nowHidden = extras.length && extras[0].classList.contains('hidden');
+      extras.forEach(x=>x.classList.toggle('hidden', !nowHidden));
+      const lbl = $('qaMoreLabel'); if(lbl) lbl.textContent = nowHidden ? 'Less' : 'More';
+    }
     else if(a === 'toggle-location-editor') $('locationEditor').classList.toggle('hidden');
     else if(a === 'toggle-playing-identity') $('playingIdentityEditor').classList.toggle('hidden');
     else if(a === 'open-report-dispute') openReportDisputeModal();
