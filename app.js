@@ -3562,6 +3562,22 @@ function pickToss(kind, val){
   updateTossPreview();
 }
 
+/* Called at SAVE time by each of the four wiring sites that link a match/
+   fixture/tournament to a Ground record: if the venue text no longer matches
+   the name that was set when the ground was picked (the scorer retyped over
+   it), the link is dropped rather than silently saved against a now-
+   mismatched name. Never guesses which is "right" — just refuses to save a
+   pairing that might not be.
+   Top-level on purpose: a duplicate of this also lives nested inside the
+   ground-picker closure further down (used there internally), but several
+   call sites — including startMatch() below — are outside that closure and
+   need their own reachable copy, or every match start throws
+   "resolveGroundLinkAtSave is not defined". */
+function resolveGroundLinkAtSave(groundId, selectedName, currentVenueText){
+  if(!groundId) return null;
+  return (selectedName || '').trim() === (currentVenueText || '').trim() ? groundId : null;
+}
+
 function startMatch(toss){
   // If the toss says the side listed second bats first, swap them so that
   // innings 1 is always the batting side. Keeps the engine model simple.
